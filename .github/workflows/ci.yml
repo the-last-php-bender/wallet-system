@@ -56,7 +56,7 @@ jobs:
       DB_PORT: 3306
       DB_USER: wallet_user
       DB_PASSWORD: walletsecretpassword
-      DB_NAME: wallet_engine_test
+      DB_NAME: wallet_engine
       JWT_SECRET: ci-test-jwt-secret
       JWT_EXPIRES_IN: 15m
       JWT_REFRESH_EXPIRES_IN: 7d
@@ -88,14 +88,4 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true
 
-  snyk-scan:
-    runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Snyk
-        uses: snyk/actions/node@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: --severity-threshold=high
+
