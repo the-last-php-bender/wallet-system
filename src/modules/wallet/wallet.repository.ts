@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import crypto from 'crypto';
 import { RepositoryException, NotFoundException } from '../../common/exceptions/repository.exception';
 import { validateAmount } from '../../common/utils/money';
 
@@ -73,13 +74,17 @@ export class WalletRepository {
       throw new RepositoryException('Invalid user id for wallet creation.', `userId=${userId}`);
     }
 
+    const walletId = crypto.randomUUID();
+
+    await trx<WalletRecord>('wallets').insert({
+      id: walletId,
+      user_id: userId,
+      balance: '0',
+    });
+
     const insertedWallet = await trx<WalletRecord>('wallets')
-      .insert({
-        user_id: userId,
-        balance: '0',
-      })
-      .returning('*')
-      .then((rows) => Array.isArray(rows) ? rows[0] : rows);
+      .where('id', walletId)
+      .first();
 
     if (!insertedWallet) {
       throw new RepositoryException(

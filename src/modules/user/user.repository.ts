@@ -48,14 +48,18 @@ export class UserRepository {
     const preHashedPassword = this.hashPasswordBeforeBcrypt(trimmedPassword);
     const passwordHash = await bcrypt.hash(preHashedPassword, SALT_ROUNDS);
 
+    const userId = crypto.randomUUID();
+
+    await trx<UserRecord>('users').insert({
+      id: userId,
+      email: normalizedEmail,
+      bvn: normalizedBvn,
+      password_hash: passwordHash,
+    });
+
     const insertedUser = await trx<UserRecord>('users')
-      .insert({
-        email: normalizedEmail,
-        bvn: normalizedBvn,
-        password_hash: passwordHash,
-      })
-      .returning('*')
-      .then((rows) => Array.isArray(rows) ? rows[0] : rows);
+      .where('id', userId)
+      .first();
 
     if (!insertedUser) {
       throw new RepositoryException(

@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import crypto from 'crypto';
 import { LedgerEntryType, SortOrder } from '../../common/enums';
 import { RepositoryException } from '../../common/exceptions/repository.exception';
 
@@ -65,16 +66,19 @@ export class LedgerRepository {
     }
 
     const normalizedAmount = validatedAmount.toString();
+    const entryId = crypto.randomUUID();
+
+    await trx<LedgerEntryRecord>('ledger_entries').insert({
+      id: entryId,
+      wallet_id: walletId,
+      amount: normalizedAmount,
+      type: type,
+      description: trimmedDescription,
+    });
 
     const insertedEntry = await trx<LedgerEntryRecord>('ledger_entries')
-      .insert({
-        wallet_id: walletId,
-        amount: normalizedAmount,
-        type: type,
-        description: trimmedDescription,
-      })
-      .returning('*')
-      .then((rows) => Array.isArray(rows) ? rows[0] : rows);
+      .where('id', entryId)
+      .first();
 
     if (!insertedEntry) {
       throw new RepositoryException(
