@@ -2,7 +2,7 @@ import type { Knex } from 'knex';
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('ledger_entries', (table) => {
-    table.uuid('id').primary().defaultTo(knex.raw('UUID()'));
+    table.uuid('id').primary().defaultTo(knex.raw('(UUID())'));
     table.uuid('wallet_id').notNullable();
     table.specificType('amount', 'decimal(20,4)').notNullable();
     table.enu('type', ['DEBIT', 'CREDIT']).notNullable();
