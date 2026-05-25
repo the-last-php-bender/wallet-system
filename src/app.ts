@@ -3,14 +3,13 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import { version } from '../package.json';
 import { errorMiddleware, ErrorLogger } from './common/filters/error.middleware';
 import { ResponseHelper } from './common/response';
 import { WalletModule } from './modules/wallet';
 import { UserModule } from './modules/user';
 import { blacklistModule } from './modules/blacklist/blacklist.module';
 import { LogLevel, ErrorCode, HttpStatus, ReadinessStatus, HealthStatus, ServiceStatus } from './common/enums';
-import { apiLimiter, authLimiter, walletLimiter } from './common/guards/rate-limiter';
+import { apiLimiter } from './common/guards/rate-limiter';
 import { config } from '../config/environment';
 import db from '../config/database';
 import {
@@ -50,7 +49,7 @@ export class Application {
     this.app.use((req: Request, res: Response, next: NextFunction) => {
       activeRequestsGauge.inc({ method: req.method });
       const start = process.hrtime();
-      const route = ((req as any).route?.path as string) ?? req.path ?? 'unknown';
+      const route = (req as Request & { route?: { path?: string } }).route?.path ?? req.path ?? 'unknown';
 
       const recordMetrics = (): void => {
         const elapsed = process.hrtime(start);
@@ -174,12 +173,16 @@ export class Application {
     this.app.get('/ready', async (_req: Request, res: Response) => {
       try {
         try {
-          const pool: any = (db as any).client?.pool;
+          const dbClient = (db as unknown as { client?: { pool?: unknown } }).client;
+          const pool = dbClient?.pool;
           if (pool) {
+            const poolObj = pool as Record<string, unknown>;
             const stats = {
-              used: typeof pool.numUsed === 'function' ? pool.numUsed() : undefined,
-              free: typeof pool.numFree === 'function' ? pool.numFree() : undefined,
-              pendingAcquires: typeof pool.numPendingAcquires === 'function' ? pool.numPendingAcquires() : (typeof pool.waitersCount === 'function' ? pool.waitersCount() : undefined),
+              used: typeof poolObj.numUsed === 'function' ? (poolObj.numUsed as () => number)() : undefined,
+              free: typeof poolObj.numFree === 'function' ? (poolObj.numFree as () => number)() : undefined,
+              pendingAcquires: typeof poolObj.numPendingAcquires === 'function' 
+                ? (poolObj.numPendingAcquires as () => number)() 
+                : (typeof poolObj.waitersCount === 'function' ? (poolObj.waitersCount as () => number)() : undefined),
             };
             ErrorLogger.log(LogLevel.INFO, 'DB pool stats (ready)', new Error('pool_stats'), { service: this.serviceName, pool: stats });
           }

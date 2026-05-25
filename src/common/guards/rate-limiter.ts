@@ -1,6 +1,4 @@
 import rateLimit from 'express-rate-limit';
-import { HttpStatus } from '../enums';
-import { ResponseHelper } from '../response';
 
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

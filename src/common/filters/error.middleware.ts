@@ -1,7 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import pino from 'pino';
 import { HttpException } from '../exceptions/http.exception';
-import { RepositoryException } from '../exceptions/repository.exception';
 import { ResponseHelper } from '../response';
 import { LogLevel, ExceptionType, ErrorCode, HttpStatus } from '../enums';
 import { version } from '../../../package.json';
@@ -118,7 +117,7 @@ export function errorMiddleware(
   let statusCode: number;
   let errorCode: string;
   let message: string;
-  let extraFields: Record<string, unknown> = {};
+  const extraFields: Record<string, unknown> = {};
 
   if (err instanceof ServiceUnavailableException) {
     statusCode = err.statusCode;

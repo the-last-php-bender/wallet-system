@@ -104,7 +104,7 @@ export class LedgerRepository {
       );
     }
 
-    const client = (trx as any)?.client?.config?.client as string | undefined;
+    const client = (trx as unknown as { client?: { config?: { client?: string } } })?.client?.config?.client;
     const isPostgres = client === 'pg' || client === 'postgres' || client === 'postgresql';
     const castExpression = isPostgres
       ? "CAST(amount AS NUMERIC)"

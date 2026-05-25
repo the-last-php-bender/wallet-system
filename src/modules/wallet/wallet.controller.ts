@@ -1,6 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
 import { WalletService } from './wallet.service';
-import { BadRequestException } from '../../common/exceptions/http.exception';
 import { ResponseHelper } from '../../common/response';
 import { HealthStatus, ServiceStatus, ServiceHealth, ResponseStatus, ErrorCode, HttpStatus } from '../../common/enums';
 import { getAuthenticatedUserId } from '../../common/utils/express';
@@ -198,7 +197,7 @@ export class WalletController {
     }
   }
 
-  public async healthCheck(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  public async healthCheck(_req: Request, res: Response, _next: NextFunction): Promise<void> {
     try {
       const response: HealthCheckResponse = {
         status: HealthStatus.OK,
@@ -211,7 +210,7 @@ export class WalletController {
       };
 
       ResponseHelper.success(res, response);
-    } catch (error: unknown) {
+    } catch {
       const response: HealthCheckResponse = {
         status: HealthStatus.UNHEALTHY,
         timestamp: new Date().toISOString(),
