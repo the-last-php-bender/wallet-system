@@ -42,3 +42,9 @@ docker-compose.override.yml
 tmp/
 temp/
 LOOM_VIDEO_SCRIPT.md
+
+# Security & one-off dev scripts
+.snyk
+SECURITY.md
+fix-tests.js
+gen-test.js
