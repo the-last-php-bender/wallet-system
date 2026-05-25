@@ -1,0 +1,3 @@
+"wallet_user" "walletsecretpassword"
+"wallet_admin" "adminsecretpassword"
+"wallet_stats" "statssecretpassword"

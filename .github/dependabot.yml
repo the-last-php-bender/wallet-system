@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '09:00'
+      timezone: 'Africa/Lagos'
+    open-pull-requests-limit: 10
+    labels:
+      - 'dependencies'
+      - 'security'
+    commit-message:
+      prefix: 'fix'
+      prefix-development: 'chore'
+      include: 'scope'
+    reviewers:
+      - 'team-lead'
+    allow:
+      - dependency-type: 'direct'
+    ignore:
+      - dependency-name: 'typescript'
+        versions: ['>=6.0.0']
+    rebase-strategy: 'auto'

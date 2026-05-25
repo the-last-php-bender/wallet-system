@@ -1,0 +1,479 @@
+{
+  "info": {
+    "name": "WalletEngine API",
+    "description": "Complete API collection for the WalletEngine service. Authentication uses JWT Bearer tokens obtained from `POST /api/v1/users/authenticate`.\n\nBase URL variable defaults to `http://localhost:3000`. Update it to match your environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "wallet-engine"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "1",
+      "type": "string",
+      "description": "JWT token obtained from POST /api/v1/users/authenticate."
+    },
+    {
+      "key": "userId",
+      "value": "1",
+      "type": "string",
+      "description": "Registered user ID"
+    },
+    {
+      "key": "walletId",
+      "value": "1",
+      "type": "string",
+      "description": "Wallet ID for the user"
+    },
+    {
+      "key": "version",
+      "value": "1.0.0",
+      "type": "string",
+      "description": "API version from package.json"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & Readiness",
+      "description": "Application-level health check and readiness probe endpoints. No authentication required.",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Returns overall application health status including uptime, memory usage, and node version."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"status\": \"ok\",\n  \"timestamp\": \"2026-05-21T07:00:00.000Z\",\n  \"service\": \"WalletEngine\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "HEAD /health",
+          "request": {
+            "method": "HEAD",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Health check returning only headers (no body). Status 200 indicates the server is alive."
+          }
+        },
+        {
+          "name": "GET /ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ready",
+              "host": ["{{baseUrl}}"],
+              "path": ["ready"]
+            },
+            "description": "Readiness probe. Checks database connectivity and blacklist service health. Returns 503 if not ready."
+          },
+          "response": [
+            {
+              "name": "200 Ready",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"status\": \"ready\",\n  \"timestamp\": \"2026-05-21T07:00:00.000Z\",\n  \"checks\": {\n    \"database\": {\n      \"status\": \"connected\",\n      \"latency\": \"ok\"\n    },\n    \"blacklistService\": {\n      \"status\": \"healthy\",\n      \"circuitState\": \"CLOSED\",\n      \"cacheSize\": 0\n    }\n  }\n}"
+            },
+            {
+              "name": "503 Not Ready",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"status\": \"not_ready\",\n  \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "HEAD /ready",
+          "request": {
+            "method": "HEAD",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ready",
+              "host": ["{{baseUrl}}"],
+              "path": ["ready"]
+            },
+            "description": "Readiness probe returning headers only."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wallet",
+      "description": "Wallet operations including balance queries, funding, transfers, withdrawals, reconciliation, and health.",
+      "item": [
+        {
+          "name": "GET /api/v1/wallet/health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "wallet", "health"]
+            },
+            "description": "Wallet module health check. Returns status of database, wallet service, and ledger service."
+          },
+          "response": [
+            {
+              "name": "200 Healthy",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"status\": \"ok\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\",\n    \"services\": {\n      \"database\": \"connected\",\n      \"walletService\": \"healthy\",\n      \"ledgerService\": \"healthy\"\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/v1/wallet/balance",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet/balance",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "wallet", "balance"]
+            },
+            "description": "Get the current wallet balance for the authenticated user. Creates a wallet if none exists."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"walletId\": 1,\n    \"balance_in_kobo\": \"50000\",\n    \"currency\": \"NGN\",\n    \"isNew\": false\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST /api/v1/wallet/fund",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"10000\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet/fund",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "wallet", "fund"]
+            },
+            "description": "Fund (credit) the authenticated user's wallet. Amount must be a positive integer amount in kobo, max 999999999999999999."
+          },
+          "response": [
+            {
+              "name": "200 Funded",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"FND-1716163200000-A1B2C3D4\",\n    \"userId\": 1,\n    \"amount_in_kobo\": \"10000\",\n    \"new_balance_in_kobo\": \"60000\",\n    \"currency\": \"NGN\",\n    \"creditEntryId\": 5,\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST /api/v1/wallet/transfer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"receiverUserId\": 2,\n  \"amount\": \"5000\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet/transfer",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "wallet", "transfer"]
+            },
+            "description": "Transfer funds from the authenticated user's wallet to another user. Uses deterministic lock ordering to prevent deadlocks. Sender and receiver cannot be the same user."
+          },
+          "response": [
+            {
+              "name": "200 Transferred",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"TXN-1716163200000-E5F6G7H8\",\n    \"senderUserId\": 1,\n    \"receiverUserId\": 2,\n    \"amount_in_kobo\": \"5000\",\n    \"sender_new_balance_in_kobo\": \"45000\",\n    \"receiver_new_balance_in_kobo\": \"55000\",\n    \"currency\": \"NGN\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST /api/v1/wallet/withdraw",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"5000\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet/withdraw",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "wallet", "withdraw"]
+            },
+            "description": "Withdraw (debit) funds from the authenticated user's wallet. Requires sufficient balance."
+          },
+          "response": [
+            {
+              "name": "200 Withdrawn",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"WTH-1716163200000-I9J0K1L2\",\n    \"userId\": 1,\n    \"amount_in_kobo\": \"5000\",\n    \"new_balance_in_kobo\": \"45000\",\n    \"currency\": \"NGN\",\n    \"debitEntryId\": 6,\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/v1/wallet/reconcile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet/reconcile",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "wallet", "reconcile"]
+            },
+            "description": "Audit reconciliation. Compares the cached wallet balance against the ledger- computed sum. Returns 409 if a discrepancy is detected."
+          },
+          "response": [
+            {
+              "name": "200 Balanced",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"code\": \"BALANCE_RECONCILED\",\n  \"data\": {\n    \"walletId\": 1,\n    \"ledger_sum_in_kobo\": \"50000\",\n    \"cached_balance_in_kobo\": \"50000\",\n    \"isBalanced\": true,\n    \"discrepancy_in_kobo\": \"0\",\n    \"currency\": \"NGN\"\n  }\n}"
+            },
+            {
+              "name": "409 Mismatch",
+              "status": "Conflict",
+              "code": 409,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"error\",\n  \"code\": \"BALANCE_MISMATCH\",\n  \"data\": {\n    \"walletId\": 1,\n    \"ledger_sum_in_kobo\": \"49000\",\n    \"cached_balance_in_kobo\": \"50000\",\n    \"isBalanced\": false,\n    \"discrepancy_in_kobo\": \"1000\",\n    \"currency\": \"NGN\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "description": "User registration, authentication, and profile management.",
+      "item": [
+        {
+          "name": "POST /api/v1/users/register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john.doe@example.com\",\n  \"bvn\": \"12345678901\",\n  \"password\": \"SecurePass123\",\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"dateOfBirth\": \"1990-01-15\",\n  \"phoneNumber\": \"08012345678\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "register"]
+            },
+            "description": "Register a new user. BVN is checked against the Adjutor Karma blacklist. A wallet is automatically created. No authentication required."
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"userId\": 1,\n    \"walletId\": 1,\n    \"email\": \"john.doe@example.com\",\n    \"balance\": \"0\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+            },
+            {
+              "name": "400 Validation Error",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"error\",\n  \"code\": \"EMAIL_INVALID\",\n  \"message\": \"Validation failed: Email must be a valid email address\"\n}"
+            },
+            {
+              "name": "403 Blacklisted",
+              "status": "Forbidden",
+              "code": 403,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"error\",\n  \"code\": \"USER_BLACKLISTED\",\n  \"message\": \"Registration denied. The provided identity information has been flagged in our compliance system.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST /api/v1/users/authenticate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john.doe@example.com\",\n  \"password\": \"SecurePass123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/authenticate",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "authenticate"]
+            },
+            "description": "Authenticate a user with email and password. Returns userId and a token (the userId as a string). No authentication required."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"userId\": 1,\n    \"email\": \"john.doe@example.com\",\n    \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\"\n  }\n}"
+            },
+            {
+              "name": "401 Invalid Credentials",
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"error\",\n  \"code\": \"INVALID_CREDENTIALS\",\n  \"message\": \"Invalid email or password. Please try again.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/v1/users/profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "profile"]
+            },
+            "description": "Get the authenticated user's profile information (email, BVN, creation date)."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"id\": 1,\n    \"email\": \"john.doe@example.com\",\n    \"createdAt\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "404 Catch-All",
+      "description": "Any unmatched route returns this response.",
+      "item": [
+        {
+          "name": "GET /api/v1/wallet/nonexistent",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet/nonexistent",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "wallet", "nonexistent"]
+            },
+            "description": "Example of an unmatched route. All undefined endpoints return 404 with this format."
+          },
+          "response": [
+            {
+              "name": "404 Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"error\",\n  \"code\": \"ROUTE_NOT_FOUND\",\n  \"message\": \"The requested resource endpoint does not exist on this server.\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+# Snyk policy file
+# Exclude dev/test only directories from scanning
+exclude:
+  global:
+    - '**/tests/**'
+    - '**/*.test.ts'
+    - '**/*.spec.ts'
+    - 'coverage/**'
+    - 'dist/**'
+
+# Patch vulnerabilities
+patch: {}
+
+# Ignore specific vulnerabilities (with expiry and reason)
+ignore:
+  'SNYK-JS-MYSQL2-*':
+    - '*':
+        reason: 'mysql2 is pinned to latest minor within major. Patches applied via npm audit fix.'
+        expires: '2026-12-31T00:00:00.000Z'
