@@ -2,7 +2,7 @@ import { createApplication, Application } from './app';
 import { config } from '../config/environment';
 import { ErrorLogger, logger } from './common/filters/error.middleware';
 import { blacklistModule } from './modules/blacklist/blacklist.module';
-import { LogLevel, ErrorCode } from './common/enums';
+import { LogLevel } from './common/enums';
 import db from '../config/database';
 import http from 'http';
 import net from 'net';

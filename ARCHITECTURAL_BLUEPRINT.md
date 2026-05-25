@@ -1,6 +1,6 @@
 # Scientific Finance Wallet Engine
 ## Architectural Blueprint & Documentation Manual
-### Version 1.0.0 | TypeScript + Node.js + Express + PostgreSQL + PgBouncer
+### Version 1.2.0 | TypeScript + Node.js + Express + MySQL 8.0
 
 ---
 
@@ -13,9 +13,8 @@
 5. [Process Lifecycle & Graceful Cleanup](#5-process-lifecycle--graceful-cleanup)
 6. [Module Reference](#6-module-reference)
 7. [Database Schema & Migrations](#7-database-schema--migrations)
-8. [Infrastructure Configuration](#8-infrastructure-configuration)
-9. [Security & Observability](#9-security--observability)
-10. [Testing Strategy](#10-testing-strategy)
+8. [Security & Observability](#8-security--observability)
+9. [Testing Strategy](#9-testing-strategy)
 
 ---
 
@@ -30,10 +29,8 @@ The Wallet Engine is a high-concurrency, financial-grade transactional system bu
 | Runtime | Node.js | ≥20.0.0 |
 | Language | TypeScript | 5.5.3 |
 | HTTP Framework | Express | 4.19.2 |
-| Database | PostgreSQL | 15 (Alpine) |
-| Connection Pooler | PgBouncer | 1.22 |
+| Database | MySQL | 8.0 |
 | Query Builder | Knex.js | 3.1.0 |
-| Decimal Arithmetic | Decimal.js | 10.4.3 |
 | Validation | Joi | 17.13.3 |
 | Circuit Breaker | Opossum | 8.1.4 |
 | Logging | Pino | 9.3.2 |
@@ -76,8 +73,7 @@ wallet-system/
 │   │   ├── secrets/
 │   │   │   └── secrets.manager.ts     # Secrets management
 │   │   ├── telemetry/
-│   │   │   ├── metrics.ts             # Prometheus metrics (prom-client)
-│   │   │   └── tracing.ts             # OpenTelemetry tracing
+│   │   │   └── metrics.ts             # Prometheus metrics (prom-client)
 │   │   ├── utils/
 │   │   │   ├── express.ts             # Express utility helpers
 │   │   │   └── money.ts               # Kobo-based monetary arithmetic (bigint)
@@ -115,7 +111,7 @@ wallet-system/
 │   ├── environment.ts                  # Strongly-typed environment validation
 │   └── database.ts                    # Knex singleton with afterCreate hooks
 ├── database/
-│   ├── migrations/                    # PostgreSQL DDL migration scripts
+│   ├── migrations/                    # MySQL DDL migration scripts
 │   │   ├── 20250601000001_create_users_table.ts
 │   │   ├── 20250601000002_create_wallets_table.ts
 │   │   ├── 20250601000003_create_ledger_entries_table.ts
@@ -123,13 +119,6 @@ wallet-system/
 │   │   └── 20250601000005_harden_db_constraints.ts
 │   └── seeds/
 │       └── 01_demo_data.ts
-├── docker/
-│   ├── postgres/
-│   │   ├── conf.d/postgresql.conf     # Tuned PostgreSQL parameters
-│   │   └── init.d/01-init.sql         # Extensions, roles, grants
-│   └── pgbouncer/
-│       ├── pgbouncer.ini               # Transaction mode pool configuration
-│       └── userlist.txt                # MD5-authenticated credentials
 ├── tests/
 │   ├── jest.config.json                # Jest test configuration
 │   ├── setup.ts                        # Jest global setup with env vars
@@ -141,7 +130,6 @@ wallet-system/
 │       └── user.api.test.ts            # Supertest HTTP integration tests
 ├── scripts/
 │   └── dev.ps1                         # Development startup script
-├── docker-compose.yml                  # Postgres + PgBouncer orchestration
 ├── knexfile.ts                         # Multi-environment Knex config
 ├── package.json                        # Dependencies & scripts
 ├── tsconfig.json                       # Strict TypeScript config
@@ -271,23 +259,25 @@ The Wallet Engine is governed by three immutable physical laws of money that are
 Enforced by:
 - Every `processTransfer()` call creates a paired DEBIT entry on the sender's wallet and a paired CREDIT entry on the receiver's wallet with identical amounts.
 - The `calculateAuditBalance()` reconciliation engine sums all ledger entries for a wallet and compares the aggregate to the cached `wallets.balance` field. Any mismatch triggers a CRITICAL alarm.
-- `Decimal.js` is used for all monetary arithmetic, ensuring that `0.1 + 0.2 === 0.3` (unlike IEEE 754 floating-point).
+- JavaScript `bigint` is used for all monetary arithmetic — no floating-point, no decimal libraries, perfect precision.
 
 ```typescript
-public async calculateAuditBalance(walletId: number): Promise<ReconciliationResult> {
+public async calculateAuditBalance(walletId: string): Promise<ReconciliationResult> {
   const ledgerSumResult = await this.ledgerRepository.sumByWalletId(walletId, mockTrx);
-  const ledgerSum = new Decimal(ledgerSumResult);
-  const cachedBalance = new Decimal(wallet.balance);
-  const discrepancy = ledgerSum.minus(cachedBalance).abs();
-  const isBalanced = discrepancy.lessThan('0.0001'); // 0.0001 tolerance for DECIMAL(20,4)
+  const ledgerSum = BigInt(ledgerSumResult);
+  const cachedBalance = BigInt(wallet.balance);
+  const discrepancy = ledgerSum > cachedBalance 
+    ? ledgerSum - cachedBalance 
+    : cachedBalance - ledgerSum;
+  const isBalanced = discrepancy === 0n;
 
   if (!isBalanced) {
     ErrorLogger.log('fatal', 'CRITICAL: Wallet balance mismatch detected - possible data corruption',
       new Error('RECONCILIATION_FAILURE'), {
         walletId,
-        ledgerSum: ledgerSum.toFixed(4),
-        cachedBalance: cachedBalance.toFixed(4),
-        discrepancy: discrepancy.toFixed(4),
+        ledgerSum: ledgerSum.toString(),
+        cachedBalance: cachedBalance.toString(),
+        discrepancy: discrepancy.toString(),
         severity: 'CRITICAL',
         alertType: 'BALANCE_MISMATCH',
         requiresInvestigation: true,
@@ -303,7 +293,7 @@ public async calculateAuditBalance(walletId: number): Promise<ReconciliationResu
 
 Enforced by:
 - The `wallets` table has **no UPDATE trigger** for balance changes in the application layer — all balance mutations flow through the repository which creates a ledger entry alongside any balance update.
-- Ledger entries use a custom PostgreSQL enum type `ledger_entry_type` with values `'DEBIT'` and `'CREDIT'`.
+- Ledger entries use a custom MySQL ENUM type `ledger_entry_type` with values `'DEBIT'` and `'CREDIT'`.
 - The `ledger_entries` table uses `ON DELETE RESTRICT` on the `wallet_id` foreign key, preventing deletion of a wallet while audit entries exist.
 
 ```typescript
@@ -331,7 +321,7 @@ const creditEntry = await this.ledgerRepository.createEntry({
 > **Concurrent transactions competing for the same wallet resources must acquire locks in a globally deterministic sequence to prevent deadlocks.**
 
 Enforced by:
-- `findByUserIdForUpdate()` wraps the wallet SELECT query with PostgreSQL's `FOR UPDATE` clause, acquiring a row-level exclusive lock.
+- `findByUserIdForUpdate()` wraps the wallet SELECT query with MySQL's `FOR UPDATE` clause, acquiring a row-level exclusive lock.
 - Before locking, user IDs are sorted: `[firstId, secondId] = senderId < receiverId ? [senderId, receiverId] : [receiverId, senderId]`.
 - This ensures that whichever direction the transfer flows (A→B or B→A), both transactions will always lock user A's wallet first, then user B's wallet — **never in reverse order**.
 
@@ -461,7 +451,7 @@ The `BlacklistModule` wraps the `AdjutorProvider` behind an **Opossum Circuit Br
 | `errorPercentageThreshold` | 50% | `CIRCUIT_BREAKER_ERROR_PERCENTAGE_THRESHOLD` |
 | `volumeThreshold` | 5 | `CIRCUIT_BREAKER_VOLUME_THRESHOLD` |
 | `resetTimeout` | 60,000ms | Auto-assigned |
-| Pool Mode | Transaction | PgBouncer config |
+
 
 #### Circuit Breaker State Machine
 
@@ -592,22 +582,7 @@ For `/transfer` endpoints, the system handles brute-force transaction spikes thr
 
 3. **InsufficientFundsException Early Exit**: When a wallet has insufficient balance, the transaction is rolled back immediately at the database level without completing the full transfer workflow. This releases the lock quickly, allowing the next queued transfer to proceed.
 
-4. **PgBouncer Transaction Mode**: PgBouncer in transaction mode (`pool_mode = transaction`) multiplexes hundreds of application connections over a small pool of real database connections. This means even under heavy spike traffic (e.g., 10,000 concurrent transfer requests), the system does not create 10,000 simultaneous database connections — PgBouncer queues them on ~20 real connections, preventing connection exhaustion.
-
-```yaml
-# PgBouncer transaction mode configuration
-wallet-pgbouncer:
-  environment:
-    POOL_MODE: transaction
-    MAX_CLIENT_CONN: "200"
-    DEFAULT_POOL_SIZE: "20"
-    MIN_POOL_SIZE: "5"
-    RESERVE_POOL_SIZE: "5"
-    RESERVE_POOL_TIMEOUT: "5"
-    MAX_DB_CONNECTIONS: "100"
-    SERVER_LIFETIME: "3600"
-    SERVER_IDLE_TIMEOUT: "600"
-```
+4. **Connection Pooling**: Knex.js manages a pool of database connections (min=2, max=10). Under heavy spike traffic (e.g., 10,000 concurrent transfer requests), the database-level `FOR UPDATE` locking serializes access to contended wallet rows, ensuring data integrity without overwhelming the database with active connections.
 
 ### 4.4 Security Header Enforcement
 
@@ -695,8 +670,7 @@ Signal received (SIGTERM | SIGINT | SIGUSR2)
     ┌─ Phase 2: closeDatabasePool() ─────────────────────────────┐
     │  await db.destroy()                                          │
     │  // Closes all Knex connection pool sockets                 │
-    │  // Returns connections to PgBouncer                         │
-    │  // PgBouncer returns them to PostgreSQL                    │
+    │  // Returns connections to the database pool                │
     └──────────────────────────────────────────────────────────────┘
               │
               ▼
@@ -724,29 +698,6 @@ Signal received (SIGTERM | SIGINT | SIGUSR2)
     │  Clean zero-exit  │
     │  termination      │
     └───────────────────┘
-```
-
-### 6.3 PgBouncer Connection Drain Sequence
-
-When `db.destroy()` is called, the following sequence occurs at the infrastructure level:
-
-```
-Knex Connection Pool (Node.js)
-  └─ Acquires all active connections
-  └─ Executes any pending queries (with timeout)
-  └─ Closes each connection socket
-
-PgBouncer (Transaction Mode)
-  └─ Sees connections close
-  └─ Returns slots to available pool
-  └─ Decrements active connection count
-  └─ Does NOT close real database connections (pooled)
-
-PostgreSQL (wallet-db)
-  └─ Detects socket closure from PgBouncer
-  └─ Backend process terminates cleanly
-  └─ No orphaned connections
-  └─ Connection slot freed in max_connections
 ```
 
 ### 5.4 Pino Diagnostic Telemetry During Shutdown
@@ -779,7 +730,7 @@ process.exit(0);
 
 ---
 
-## 7. Module Reference
+## 6. Module Reference
 
 ### 6.1 Application Module (`app.ts`)
 
@@ -855,7 +806,69 @@ process.exit(0);
      ON DELETE CASCADE           ON DELETE RESTRICT                ON DELETE RESTRICT
 ```
 
-Note: All primary and foreign keys now use UUID (v4) instead of auto-incrementing integers (SERIAL). The `wallets.user_id` foreign key references `users.id` with `ON DELETE CASCADE`, and `ledger_entries.wallet_id` references `wallets.id` with `ON DELETE RESTRICT`.
+Note: All primary and foreign keys use UUID (v4) instead of auto-incrementing integers (SERIAL). The `wallets.user_id` foreign key references `users.id` with `ON DELETE CASCADE`, and `ledger_entries.wallet_id` references `wallets.id` with `ON DELETE RESTRICT`.
+
+---
+
+### 🆔 Primary Key & ID Generation Strategy
+
+**Key Design Decision:** All system IDs (User, Wallet, Ledger) are generated at the **application level** using a centralized `IdGenerator` utility wrapper (`src/common/utils/id-generator.ts`) executing Node's native `crypto.randomUUID()`, rather than relying on MySQL's native `DEFAULT (UUID())` database constraint.
+
+#### Architectural Rationale (Why We Chose This)
+
+| Risk Factor | Database-Level UUID | App-Level IdGenerator (Our Approach) |
+| :--- | :--- | :--- |
+| **Insert Record Retrieval** | ❌ **Broken.** MySQL's `LAST_INSERT_ID()` returns `0` for functional defaults. Knex cannot easily fetch the newly generated row. | ✅ **Perfect.** The ID is known *before* the insert query runs, allowing instant, clean `.where('id', walletId).first()` fetch queries. |
+| **Framework Compatibility** | ❌ **Flawed.** Knex's built-in `table.uuid()` generates Postgres-specific syntax that causes compilation crashes on MySQL engines. | ✅ **Database Agnostic.** Perfectly compatible with MySQL, PostgreSQL, SQLite, or any future datastore without engine overrides. |
+| **Testability & Mocking** | ❌ **Untestable.** Relies on database side-effects, making isolated unit testing or repository mocking impossible. | ✅ **Highly Testable.** Bound to an `IIdGenerator` interface, allowing us to swap in a `MockIdGenerator` for deterministic testing. |
+| **System Visibility** | ❌ **Blind.** The ID is hidden until after a database write transaction completes. | ✅ **Transparent.** The unique ID can be attached to application logs and internal audit trails before the query hits the wire. |
+
+#### Implementation
+
+```typescript
+// src/common/utils/id-generator.ts
+import crypto from 'crypto';
+
+export interface IIdGenerator {
+  generate(): string;
+}
+
+export class IdGenerator implements IIdGenerator {
+  public generate(): string {
+    return crypto.randomUUID();
+  }
+}
+
+export const idGenerator = new IdGenerator();
+```
+
+#### Usage Pattern (in all repositories)
+
+```typescript
+// Example from wallet.repository.ts
+import { idGenerator } from '../../common/utils/id-generator';
+
+public async createWallet(userId: string, trx: Knex.Transaction): Promise<WalletRecord> {
+  const walletId = idGenerator.generate();  // Known BEFORE insert
+
+  await trx<WalletRecord>('wallets').insert({
+    id: walletId,
+    user_id: userId,
+    balance: '0',
+  });
+
+  // Direct lookup using the known ID:
+  const insertedWallet = await trx<WalletRecord>('wallets')
+    .where('id', walletId)
+    .first();
+
+  return insertedWallet as WalletRecord;
+}
+```
+
+---
+
+**Kobo-only Monetary Storage**: All monetary values (`wallets.balance`, `ledger_entries.amount`) are stored as `VARCHAR(64)` containing integer strings representing kobo (smallest Nigerian currency unit: 1 Naira = 100 kobo). No decimal types are used — all arithmetic is performed with JavaScript `bigint` for perfect precision. The frontend is responsible for converting kobo to/from any display format (e.g., dividing by 100 to show Naira).
 
 ### 7.2 Migration Scripts
 
@@ -865,7 +878,7 @@ Creates the `users` table with email and BVN uniqueness constraints using UUID p
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT UUID()` | UUID v4 generated by MySQL |
+| `id` | `VARCHAR(36)` | `PRIMARY KEY` | UUID v4 generated at **application level** via `IdGenerator` |
 | `email` | `VARCHAR(255)` | `NOT NULL UNIQUE` | Case-insensitive via index |
 | `bvn` | `VARCHAR(11)` | `NOT NULL UNIQUE` | Nigerian BVN (11 digits) |
 | `password_hash` | `VARCHAR(255)` | `NOT NULL` | bcrypt (12 rounds) |
@@ -873,7 +886,7 @@ Creates the `users` table with email and BVN uniqueness constraints using UUID p
 | `updated_at` | `DATETIME(6)` | `NOT NULL DEFAULT CURRENT_TIMESTAMP(6)` | Updated on modification |
 
 **Indexes:**
-- `idx_users_email ON users ((lower(email::text)))` — Case-insensitive email lookup
+- `idx_users_email ON users ((lower(email)))` — Case-insensitive email lookup
 - `idx_users_bvn ON users (bvn)` — BVN direct lookup
 
 #### Migration 2: `20250601000002_create_wallets_table.ts`
@@ -884,7 +897,7 @@ Creates the `wallets` table with 1:1 relationship to users using UUID foreign ke
 |--------|------|-------------|-------|
 | `id` | `UUID` | `PRIMARY KEY DEFAULT UUID()` | UUID v4 generated by MySQL |
 | `user_id` | `UUID` | `NOT NULL UNIQUE`, `REFERENCES users(id) ON DELETE CASCADE` | 1 wallet per user |
-| `balance` | `DECIMAL(20,4)` | `NOT NULL DEFAULT '0.0000'` | 20 total digits, 4 decimal places |
+| `balance` | `VARCHAR(64)` | `NOT NULL DEFAULT '0'` | Kobo as integer string (e.g., "10000" = 100.00 Naira) |
 | `created_at` | `DATETIME(6)` | `NOT NULL DEFAULT CURRENT_TIMESTAMP(6)` | Microsecond precision |
 | `updated_at` | `DATETIME(6)` | `NOT NULL DEFAULT CURRENT_TIMESTAMP(6)` | Updated on modification |
 
@@ -901,7 +914,7 @@ Creates the `ledger_entries` table with double-entry bookkeeping using UUID fore
 |--------|------|-------------|-------|
 | `id` | `UUID` | `PRIMARY KEY DEFAULT UUID()` | UUID v4 generated by MySQL |
 | `wallet_id` | `UUID` | `NOT NULL REFERENCES wallets(id) ON DELETE RESTRICT` | Links to wallet |
-| `amount` | `DECIMAL(20,4)` | `NOT NULL` | Exact decimal (no rounding) |
+| `amount` | `VARCHAR(64)` | `NOT NULL` | Kobo as integer string (e.g., "5000" = 50.00 Naira) |
 | `type` | `ENUM('DEBIT', 'CREDIT')` | `NOT NULL` | DEBIT or CREDIT |
 | `description` | `VARCHAR(255)` | `NOT NULL` | Audit description with transaction reference |
 | `created_at` | `DATETIME(6)` | `NOT NULL DEFAULT CURRENT_TIMESTAMP(6)` | Immutable timestamp |
@@ -911,117 +924,24 @@ Creates the `ledger_entries` table with double-entry bookkeeping using UUID fore
 
 **Key Design Decision**: `ON DELETE RESTRICT` on `wallet_id` prevents deletion of a wallet that still has ledger entries, enforcing the **Conservation of Value** law at the database level.
 
-### 7.3 Decimal Precision
+### 7.3 Kobo Storage & Precision
 
-All monetary fields use `DECIMAL(20,4)` — 20 total digits, 4 decimal places. This provides:
+All monetary values are stored exclusively in **kobo** (the smallest Nigerian currency unit: 1 Naira = 100 kobo) as integer strings in `VARCHAR(64)` columns.
 
-- **Range**: Up to `99,999,999,999,999,999.9999` (approximately 100 quadrillion)
-- **Precision**: Exactly 4 decimal places (0.0001 precision, equivalent to 1/10,000 of the base currency unit)
-- **No rounding errors**: Unlike `FLOAT` or `DOUBLE`, `DECIMAL` arithmetic is exact in SQL
-- **Decimal.js alignment**: Both PostgreSQL `DECIMAL(20,4)` and `Decimal.js` use the same 4-decimal precision, preventing cross-boundary precision loss
+**Key Design Principles:**
+- **No decimal types anywhere**: Database uses `VARCHAR(64)` to store integer strings (e.g., `"10000"`)
+- **No floating-point arithmetic**: All calculations use JavaScript `bigint` for perfect precision
+- **Frontend conversion only**: The frontend is responsible for converting kobo to/from any display format (e.g., divide by 100 to show Naira)
+- **Unlimited precision**: `VARCHAR(64)` can handle extremely large integer values (up to 64 digits)
 
----
-
-## 8. Infrastructure Configuration
-
-### 8.1 Docker Compose Service Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    wallet_network (bridge)                       │
-│                     172.28.0.0/16 subnet                        │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                    wallet-db                              │  │
-│  │              postgres:15-alpine                            │  │
-│  │              Port: 5433 (host)                           │  │
-│  │              Internal: 5432                               │  │
-│  │              max_connections: 200                          │  │
-│  │              shared_buffers: 128MB                        │  │
-│  │              healthcheck: pg_isready                       │  │
-│  └──────────────────────────┬─────────────────────────────────┘  │
-│                             │                                     │
-│                      Port: 5432                                   │
-│                       (internal)                                   │
-│                             │                                     │
-│  ┌──────────────────────────▼─────────────────────────────────┐  │
-│  │                  wallet-pgbouncer                           │  │
-│  │                 edoburu/pgbouncer:1.22                     │  │
-│  │                 Port: 5432 (host)                          │  │
-│  │                 pool_mode: transaction                     │  │
-│  │                 max_client_conn: 200                         │  │
-│  │                 default_pool_size: 20                       │  │
-│  │                 healthcheck: pgbouncer -V                   │  │
-│  └──────────────────────────┬─────────────────────────────────┘  │
-│                             │                                     │
-│                      Port: 5432                                   │
-│                    (exposed to host)                              │
-│                             │                                     │
-│                    Node.js Application                           │
-│                    (connects here)                                 │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 8.2 PgBouncer Pool Configuration
-
-| Parameter | Value | Implication |
-|-----------|-------|-------------|
-| `pool_mode` | `transaction` | Connections are only held during a transaction, maximizing multiplexing |
-| `max_client_conn` | `200` | Up to 200 application-level connections can connect to PgBouncer |
-| `default_pool_size` | `20` | Each user/database pair gets 20 real PostgreSQL connections |
-| `min_pool_size` | `5` | PgBouncer maintains at least 5 connections even when idle |
-| `reserve_pool_size` | `5` | Extra connections available for burst traffic |
-| `reserve_pool_timeout` | `5s` | Extra connections returned after 5 seconds of idle |
-| `max_db_connections` | `100` | Maximum connections per database across all pools |
-| `server_lifetime` | `3600s` | Real connections rotated every hour |
-| `server_idle_timeout` | `600s` | Idle connections closed after 10 minutes |
-| `server_connect_query` | `SELECT 1` | Connection health check on acquire |
-
-### 8.3 Node.js → PgBouncer Connection Flow
-
-```
-Application Layer
-  │
-  ├─ Knex.js Connection Pool (min=2, max=10)
-  │    ├─ Manages up to 10 logical connections in-process
-  │    ├─ acquireTimeoutMillis: 10000 (10s to get a connection)
-  │    └─ afterCreate: SET datestyle, timezone, client_encoding, lock_timeout
-  │
-  └─► TCP: localhost:5432 ──► PgBouncer (wallets-pgbouncer:5432)
-       │
-       ├─► max_client_conn: 200
-       │    └─ Up to 200 application connections multiplexed
-       │
-       └─► default_pool_size: 20
-            └─► Real PostgreSQL connections: 20
-                 └─► Database: wallet_engine
-                      └─► max_connections: 200 (PostgreSQL setting)
-```
-
-### 8.4 PostgreSQL Tuning Parameters
-
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `max_connections` | 200 | Total backend processes |
-| `shared_buffers` | 128MB | Memory for caching relation data |
-| `effective_cache_size` | 256MB | Planner's estimate of available cache |
-| `work_mem` | 4MB | Memory per sort/hash operation |
-| `maintenance_work_mem` | 64MB | Memory for VACUUM, CREATE INDEX |
-| `random_page_cost` | 1.1 | SSD-friendly sequential scan preference |
-| `effective_io_concurrency` | 200 | Parallel I/O for bitmap scans |
-| `max_worker_processes` | 8 | Parallel query parallelism |
-| `max_parallel_workers_per_gather` | 4 | Workers per parallel node |
-| `statement_timeout` | 30s | Hard query timeout |
-| `lock_timeout` | 10s | Lock wait timeout |
-| `deadlock_timeout` | 1s | Deadlock detection interval |
-| `idle_in_transaction_session_timeout` | 60s | Auto-rollback of idle transactions |
-| `full_page_writes` | off | PostgreSQL 15 optimization |
-| `wal_compression` | off | PostgreSQL 15 optimization |
+**Why strings?**
+- `bigint` in JavaScript can handle arbitrarily large integers
+- String storage ensures compatibility across databases and prevents precision loss during serialization
+- MySQL arithmetic uses `CAST(amount AS DECIMAL(65,0))` for operations, casting back to string for storage
 
 ---
 
-## 9. Security & Observability
+## 8. Security & Observability
 
 ### 9.1 Security Controls Matrix
 
@@ -1033,7 +953,7 @@ Application Layer
 | CORS Restriction | Client Policy | Whitelist-based origin checking |
 | Security Headers | Browser Protection | HSTS, X-Frame-Options, X-Content-Type-Options, CSP |
 | SQL Injection Prevention | Data Access | Parameterized queries via Knex query builder |
-| Decimal Arithmetic | Financial Integrity | `Decimal.js` — no floating-point rounding errors |
+| Kobo-only Integer Arithmetic | Financial Integrity | `bigint` — no floating-point, no decimals, perfect precision |
 | FOR UPDATE Locking | Concurrency | Pessimistic locks prevent double-spending |
 | Circuit Breaker | Resilience | Opossum prevents cascading failures to external API |
 
@@ -1126,9 +1046,9 @@ This enables any Prometheus-compatible monitoring stack to scrape the service an
 
 ---
 
-## 11. Testing Strategy
+## 9. Testing Strategy
 
-### 11.1 Unit Testing: Zero-Database Pattern
+### 9.1 Unit Testing: Zero-Database Pattern
 
 All unit tests use **interface-based in-memory test doubles** that fully implement the repository interfaces without loading any database driver or opening network connections:
 
@@ -1152,7 +1072,7 @@ class InMemoryWalletRepository implements IWalletRepository {
 - Complete control over test data state
 - Interface contract compliance verified by TypeScript compiler
 
-### 10.2 Unit Test Coverage Areas
+### 9.2 Unit Test Coverage Areas
 
 | Test Suite | File | Coverage |
 |------------|------|----------|
@@ -1165,7 +1085,7 @@ class InMemoryWalletRepository implements IWalletRepository {
 | Reconciliation Mismatch | `wallet.service.test.ts` | CRITICAL log emitted on discrepancy |
 | Interface Contract Compliance | `wallet.service.test.ts` | `IWalletRepository` and `ILedgerRepository` satisfied by in-memory doubles |
 
-### 10.3 Integration Testing: Supertest HTTP Tests
+### 9.3 Integration Testing: Supertest HTTP Tests
 
 Integration tests run against the live Express application (with mocked database layer) using `supertest`:
 
@@ -1194,11 +1114,9 @@ expect(response.body.data.userId).toBeDefined();
 
 ---
 
-## 11. Scaling to One Million Users
+## 10. Scaling to One Million Users
 
-The current architecture supports moderate throughput on a single instance. To reach **1 million active users** with sub-second response times and financial-grade integrity, the following additions are recommended in priority order.
-
-### 11.1 Phase 1: Distributed Caching with Redis (10k–100k users)
+### 10.1 Phase 1: Distributed Caching with Redis (10k–100k users)
 
 | Component | What it replaces | Why |
 |-----------|-----------------|-----|
@@ -1222,7 +1140,7 @@ The current architecture supports moderate throughput on a single instance. To r
 - Rate limiter uses Redis `INCR` + `EXPIRE` with sliding window
 - Refresh tokens stored in Redis with auto-expiry for instant revocation
 
-### 11.2 Phase 2: Horizontal Scaling with Load Balancer (100k–500k users)
+### 10.2 Phase 2: Horizontal Scaling with Load Balancer (100k–500k users)
 
 ```
                          ┌─────────────────┐
@@ -1265,7 +1183,7 @@ The current architecture supports moderate throughput on a single instance. To r
 - Read queries (balance checks, ledger history, user lookup) → replicas
 - ProxySQL in front of MySQL to handle connection pooling and query routing
 
-### 11.3 Phase 3: Async Processing with Message Queue (500k–1M users)
+### 10.3 Phase 3: Async Processing with Message Queue (500k–1M users)
 
 Offload non-critical and audit-path work from the synchronous HTTP request cycle to background workers.
 
@@ -1308,7 +1226,7 @@ await this.eventBus.publish('wallet.transfer.completed', {
 });
 ```
 
-### 11.4 Phase 4: Database Optimizations for 1M Users
+### 10.4 Phase 4: Database Optimizations for 1M Users
 
 #### Read-Write Splitting
 
@@ -1349,17 +1267,16 @@ CREATE INDEX idx_users_email_lower ON users ((LOWER(email)));
 CREATE INDEX idx_idempotency_lookup ON idempotency_keys (key, expires_at);
 ```
 
-### 11.5 Phase 5: Observability at Scale
+### 10.5 Phase 5: Observability at Scale
 
 | Tool | Purpose | Why at 1M users |
 |------|---------|-----------------|
 | **Prometheus + Grafana** | Metrics dashboards | Spot bottlenecks before they become incidents |
-| **OpenTelemetry traces** | Distributed tracing | Trace a single transfer across 5+ services |
 | **Structured logging with correlation IDs** | Log aggregation (ELK/Loki) | `X-Request-ID` correlates every log line across instances |
 | **Synthetic health checks** | External monitoring | Simulate user registration + transfer every 60s from outside the cluster |
 | **PagerDuty/On-call** | Alert routing | Reconciliation CRITICALs must page a human |
 
-### 11.6 Cost Estimate for 1M Users
+### 10.6 Cost Estimate for 1M Users
 
 | Tier | Monthly Cost (est.) | Setup |
 |------|--------------------|-------|
@@ -1371,4 +1288,165 @@ All costs estimated for AWS us-east-1 (on-demand, no reserved instances). Reserv
 
 ---
 
-*Document Version: 1.1.0 | Wallet Engine | Built with TypeScript + Node.js + Express + MySQL | Updated for production deployment on Render*
+*Document Version: 1.3.0 | Wallet Engine | Built with TypeScript + Node.js + Express + MySQL 8.0 | Updated for production deployment on Render with Aiven MySQL*
+
+---
+
+## 11. Recent Changes & Production Configuration
+
+### 11.1 Removed Technologies
+
+| Removed | Reason | Replacement |
+|---------|--------|-------------|
+| **Docker** | Unnecessary complexity for Render deployment | Native Node.js deployment |
+| **OpenTelemetry** (`@opentelemetry/*`) | `prom-client` already provides working /metrics endpoint | `prom-client` (retained) |
+| **PostgreSQL-specific UUID** (`DEFAULT UUID()`) | Not compatible with MySQL 8.0 | App-level `crypto.randomUUID()` |
+| **DECIMAL(20,4)** for monetary values | Unnecessary complexity, frontend handles display | `VARCHAR(64)` with kobo integer strings |
+
+### 11.2 Production Database: Aiven MySQL
+
+The system is configured for **Aiven MySQL** (managed MySQL service) with the following configuration:
+
+| Configuration | Value | Environment Variable |
+|---------------|-------|----------------------|
+| Host | Aiven-provided host | `DB_HOST` |
+| Port | Aiven-provided port (typically 21997) | `DB_PORT` |
+| Database | `wallet_engine` | `DB_NAME` |
+| User | Aiven-provided username | `DB_USER` |
+| Password | Aiven-provided password | `DB_PASSWORD` |
+| SSL | **Required** | `DB_SSL=true` or `NODE_ENV=production` |
+
+**SSL Enforcement**: When `NODE_ENV=production` or `DB_SSL=true`, the MySQL connection uses SSL with `rejectUnauthorized: false` (Aiven uses self-signed certificates by default).
+
+### 11.3 Environment Variables Template
+
+```bash
+# Production (.env.production)
+NODE_ENV=production
+PORT=3000
+JWT_SECRET=your-production-jwt-secret-key
+JWT_EXPIRES_IN=15m
+REFRESH_TOKEN_SECRET=your-production-refresh-secret-key
+REFRESH_TOKEN_EXPIRES_IN=7d
+
+# Aiven MySQL
+DB_HOST=mysql-your-project.aivencloud.com
+DB_PORT=21997
+DB_NAME=wallet_engine
+DB_USER=avnadmin
+DB_PASSWORD=your-aiven-password
+DB_SSL=true
+
+# Adjutor Karma API (for BVN blacklist verification)
+ADJUTOR_KARMA_API_BASE_URL=https://adjutor.lendsqr.com/v2
+ADJUTOR_KARMA_API_KEY=your-adjutor-api-key
+CIRCUIT_BREAKER_TIMEOUT=3000
+CIRCUIT_BREAKER_ERROR_PERCENTAGE_THRESHOLD=50
+CIRCUIT_BREAKER_VOLUME_THRESHOLD=5
+BLACKLIST_CACHE_TTL_MS=300000
+```
+
+### 11.4 Deployment to Render
+
+The system uses **native Node.js deployment** on Render (no Docker):
+
+1. Connect your GitHub repository to Render
+2. Configure environment variables in Render dashboard (matches `.env.production`)
+3. Set **Build Command**: `npm install && npm run build`
+4. Set **Start Command**: `npm start`
+5. Ensure Aiven MySQL allows Render's IP addresses (or use `0.0.0.0/0` for testing)
+
+**Key Files**:
+- `package.json` - Contains `build` and `start` scripts
+- `knexfile.ts` - Production config reads compiled JS from `./dist/`
+- `config/database.ts` - SSL auto-enabled in production
+
+---
+
+## 12. Data Access Layer (DAL) Optimizations (v1.3.0+)
+
+### 12.1 Creation Operation Refactor: Eliminating Redundant Database Round-Trips
+
+**Problem Identified:** All three repository creation methods (`createUser()`, `createWallet()`, `createEntry()`) were performing a wasteful sequential pattern:
+
+```
+INSERT → SELECT (redundant) → Return fetched row
+```
+
+Since we control the `id` via app-level `IdGenerator`, we already know the complete row state **before** the database write. The post-insert `SELECT` query was a completely unnecessary network hop.
+
+**Solution Applied:**
+
+```typescript
+// BEFORE (wasteful - 2 database round-trips)
+public async createWallet(userId: string, trx: Knex.Transaction): Promise<WalletRecord> {
+  const walletId = idGenerator.generate();
+  
+  await trx('wallets').insert({ id: walletId, user_id: userId, balance: '0' });
+  
+  // REDUNDANT NETWORK HOP ↓
+  const inserted = await trx('wallets').where('id', walletId).first();
+  if (!inserted) throw new RepositoryException(...);
+  return inserted;
+}
+
+// AFTER (optimized - 1 database round-trip)
+public async createWallet(userId: string, trx: Knex.Transaction): Promise<WalletRecord> {
+  const walletId = idGenerator.generate();
+  const now = new Date();       // In-memory timestamp sync
+  const initialBalance = '0';
+  
+  await trx('wallets').insert({
+    id: walletId,
+    user_id: userId,
+    balance: initialBalance,
+    created_at: now,             // Explicit timestamp
+    updated_at: now,             // Explicit timestamp
+  });
+  
+  // Return directly from memory - NO DATABASE HOP
+  return {
+    id: walletId,
+    user_id: userId,
+    balance: initialBalance,
+    created_at: now,
+    updated_at: now,
+  };
+}
+```
+
+### 12.2 Tradeoff Analysis
+
+| Dimension | Before (INSERT + SELECT) | After (INSERT + Memory Return) |
+| :--- | :--- | :--- |
+| **Network Round-Trips** | 2 per creation | 1 per creation |
+| **Database Load** | Higher (2 queries) | Lower (1 query) |
+| **Latency per Create** | Higher (2x network + query overhead) | Lower (single query) |
+| **Error Detection** | Detected missing row via `if (!inserted)` | MySQL constraint violations throw naturally; transaction rolls back at service boundary |
+| **Timestamp Accuracy** | Relied on MySQL's `CURRENT_TIMESTAMP(6)` | Application-level `new Date()` synchronized to transaction start |
+| **Testability** | Required database-backed assertions | Fully mockable at repository interface level |
+
+### 12.3 Key Architectural Principles Leveraged
+
+1. **Application-Level ID Generation:** The `IdGenerator` utility makes this optimization possible. We control the primary key, so we know the complete row contract before the query executes.
+
+2. **Transaction Propagation & Natural Error Handling:** No artificial `try/catch` blocks were added in the repository layer. MySQL constraint violations (e.g., duplicate `email`, duplicate `bvn`, foreign key violations) will:
+   - Naturally throw a runtime exception from Knex
+   - Short-circuit the execution thread
+   - Trigger cascading transaction rollback at the service boundary (via `withTransaction` helper)
+
+3. **In-Memory State Construction:** Timestamps are captured via `const now = new Date()` for deterministic synchronization. All column values are explicitly set, eliminating reliance on database `DEFAULT` clauses for returned records.
+
+### 12.4 Performance Impact
+
+| Metric | Estimated Improvement |
+| :--- | :--- |
+| Network hops reduced | **50%** (2 → 1 per create) |
+| Database query count | **50%** reduction |
+| Latency per creation | ~30-50% faster (eliminates network + query planning overhead) |
+| Connection pool utilization | Improved (fewer queries = faster connection release) |
+
+**Note:** This optimization is most impactful in:
+- High-throughput transactional workloads
+- Geographically distributed deployments (database in different AZ/region)
+- Serverless environments where connection churn is expensive

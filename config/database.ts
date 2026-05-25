@@ -15,6 +15,8 @@ const databasePassword = process.env.DB_PASSWORD ?? 'walletsecretpassword';
 const DB_POOL_MIN = parseInt(process.env.DB_POOL_MIN ?? '2', 10);
 const DB_POOL_MAX = parseInt(process.env.DB_POOL_MAX ?? '50', 10);
 
+const useSSL = process.env.DB_SSL === 'true' || process.env.NODE_ENV === 'production';
+
 const knexConfig: Knex.Config = {
   client: 'mysql2',
   connection: {
@@ -24,7 +26,8 @@ const knexConfig: Knex.Config = {
     user: databaseUser,
     password: databasePassword,
     charset: 'utf8mb4',
-    connectTimeout: 5000,
+    connectTimeout: 10000,
+    ...(useSSL ? { ssl: { rejectUnauthorized: false } } : {}),
   },
   pool: {
     min: DB_POOL_MIN,

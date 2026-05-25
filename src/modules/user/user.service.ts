@@ -54,46 +54,42 @@ export class UserService {
       phoneNumber: phoneNumber || undefined,
     };
 
-    const isDev = process.env.NODE_ENV === 'development';
-
-    if (!isDev) {
-      let verificationResult;
-      try {
-        verificationResult = await blacklistModule.verify(identityRequest);
-      } catch (error: unknown) {
-        if (error instanceof ServiceUnavailableException) {
-          ErrorLogger.log(LogLevel.ERROR, 'User registration failed due to identity service unavailability', error as Error, {
-            service: this.serviceName 
-          });
-          throw error;
-        }
-
-        const err = error as Error;
-        ErrorLogger.log(LogLevel.ERROR, 'Unexpected error during identity verification', err, {
-          service: this.serviceName,
-          email,
+    let verificationResult;
+    try {
+      verificationResult = await blacklistModule.verify(identityRequest);
+    } catch (error: unknown) {
+      if (error instanceof ServiceUnavailableException) {
+        ErrorLogger.log(LogLevel.ERROR, 'User registration failed due to identity service unavailability', error as Error, {
+          service: this.serviceName 
         });
-        throw new ServiceUnavailableException(
-          'Identity verification service encountered an unexpected error. Please try again later.',
-          'AdjutorKarmaAPI',
-          60000
-        );
+        throw error;
       }
 
-      if (verificationResult.isBlacklisted) {
-        ErrorLogger.log(LogLevel.WARN, 'Blacklisted user attempted registration', new Error('BLACKLISTED_REGISTRATION'), {
-          service: this.serviceName,
-          email,
-          bvn,
-          watchList: verificationResult.watchList,
-          fraudSuspected: verificationResult.fraudSuspected,
-          alertType: 'BLACKLISTED_USER_BLOCKED',
-        });
-        throw new ForbiddenException(
-          'Registration denied. The provided identity information has been flagged in our compliance system.',
-          ErrorCode.USER_BLACKLISTED
-        );
-      }
+      const err = error as Error;
+      ErrorLogger.log(LogLevel.ERROR, 'Unexpected error during identity verification', err, {
+        service: this.serviceName,
+        email,
+      });
+      throw new ServiceUnavailableException(
+        'Identity verification service encountered an unexpected error. Please try again later.',
+        'AdjutorKarmaAPI',
+        60000
+      );
+    }
+
+    if (verificationResult.isBlacklisted) {
+      ErrorLogger.log(LogLevel.WARN, 'Blacklisted user attempted registration', new Error('BLACKLISTED_REGISTRATION'), {
+        service: this.serviceName,
+        email,
+        bvn,
+        watchList: verificationResult.watchList,
+        fraudSuspected: verificationResult.fraudSuspected,
+        alertType: 'BLACKLISTED_USER_BLOCKED',
+      });
+      throw new ForbiddenException(
+        'Registration denied. The provided identity information has been flagged in our compliance system.',
+        ErrorCode.USER_BLACKLISTED
+      );
     }
 
     return withTransaction(db, async (trx: Knex.Transaction) => {

@@ -1,6 +1,7 @@
 import type { Knex } from 'knex';
 import { RepositoryException, NotFoundException } from '../../common/exceptions/repository.exception';
-import { validateAmount } from '../../common/utils/money';
+import { validateAmount, parseBalance, normalizeBalance } from '../../common/utils/money';
+import { idGenerator } from '../../common/utils/id-generator';
 
 export interface WalletRecord {
   id: string;
@@ -8,6 +9,13 @@ export interface WalletRecord {
   balance: string;
   created_at: Date;
   updated_at: Date;
+}
+
+function normalizeWalletRecord(wallet: WalletRecord): WalletRecord {
+  return {
+    ...wallet,
+    balance: normalizeBalance(wallet.balance),
+  };
 }
 
 export class WalletRepository {
@@ -20,7 +28,7 @@ export class WalletRepository {
       .forUpdate()
       .first();
 
-    return wallet ?? null;
+    return wallet ? normalizeWalletRecord(wallet) : null;
   }
 
   public async findByUserId(
@@ -31,7 +39,7 @@ export class WalletRepository {
       .where('user_id', userId)
       .first();
 
-    return wallet ?? null;
+    return wallet ? normalizeWalletRecord(wallet) : null;
   }
 
   public async findByWalletId(
@@ -42,7 +50,7 @@ export class WalletRepository {
       .where('id', walletId)
       .first();
 
-    return wallet ?? null;
+    return wallet ? normalizeWalletRecord(wallet) : null;
   }
 
   public async updateBalance(
@@ -73,22 +81,25 @@ export class WalletRepository {
       throw new RepositoryException('Invalid user id for wallet creation.', `userId=${userId}`);
     }
 
-    const insertedWallet = await trx<WalletRecord>('wallets')
-      .insert({
-        user_id: userId,
-        balance: '0',
-      })
-      .returning('*')
-      .then((rows) => Array.isArray(rows) ? rows[0] : rows);
+    const walletId = idGenerator.generate();
+    const now = new Date();
+    const initialBalance = '0';
 
-    if (!insertedWallet) {
-      throw new RepositoryException(
-        'Failed to create wallet.',
-        `Insert did not return a wallet row for userId=${userId}`
-      );
-    }
+    await trx<WalletRecord>('wallets').insert({
+      id: walletId,
+      user_id: userId,
+      balance: initialBalance,
+      created_at: now,
+      updated_at: now,
+    });
 
-    return insertedWallet as WalletRecord;
+    return {
+      id: walletId,
+      user_id: userId,
+      balance: initialBalance,
+      created_at: now,
+      updated_at: now,
+    };
   }
 
   public async incrementBalance(
@@ -150,7 +161,7 @@ export class WalletRepository {
       throw new NotFoundException('Wallet');
     }
 
-    const currentBalance = BigInt(wallet.balance);
+    const currentBalance = parseBalance(wallet.balance);
     let required: bigint;
     try {
       required = BigInt(requiredAmount);
@@ -178,7 +189,7 @@ export class WalletRepository {
       throw new NotFoundException('Wallet');
     }
 
-    const currentBalance = BigInt(wallet.balance);
+    const currentBalance = parseBalance(wallet.balance);
     let required: bigint;
     try {
       required = BigInt(requiredAmount);
@@ -190,7 +201,7 @@ export class WalletRepository {
     }
 
     return {
-      wallet: wallet as WalletRecord,
+      wallet: normalizeWalletRecord(wallet as WalletRecord),
       isSufficient: currentBalance >= required,
     };
   }

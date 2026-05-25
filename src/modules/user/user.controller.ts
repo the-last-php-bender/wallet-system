@@ -1,7 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { UserService } from './user.service';
 import { BadRequestException, ForbiddenException } from '../../common/exceptions/http.exception';
-import { ErrorLogger } from '../../common/filters/error.middleware';
 import { ResponseHelper } from '../../common/response';
 import { ErrorCode, HttpStatus } from '../../common/enums';
 import jwt from 'jsonwebtoken';
