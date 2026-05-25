@@ -134,7 +134,7 @@ const knexConfig: KnexConfig = {
     },
     migrations: {
       tableName: 'knex_migrations',
-      directory: './dist/database/migrations',
+      directory: './database/migrations',
       extension: 'js',
       loadExtensions: ['.js'],
     },
