@@ -56,7 +56,7 @@
     "@types/jest": "^29.5.12",
     "@types/joi": "^17.2.2",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^20.14.10",
+    "@types/node": "^25.9.1",
     "@types/opossum": "^8.1.9",
     "@types/pg": "^8.11.10",
     "@types/supertest": "^6.0.2",
