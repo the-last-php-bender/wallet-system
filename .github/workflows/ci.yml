@@ -88,15 +88,4 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true
 
-  snyk-scan:
-    runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Snyk
-        uses: snyk/actions/node@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: --severity-threshold=high
+

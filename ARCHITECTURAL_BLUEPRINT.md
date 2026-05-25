@@ -1194,4 +1194,181 @@ expect(response.body.data.userId).toBeDefined();
 
 ---
 
-*Document Version: 1.0.0 | Wallet Engine | Built with TypeScript + Node.js + PostgreSQL + PgBouncer*
+## 11. Scaling to One Million Users
+
+The current architecture supports moderate throughput on a single instance. To reach **1 million active users** with sub-second response times and financial-grade integrity, the following additions are recommended in priority order.
+
+### 11.1 Phase 1: Distributed Caching with Redis (10k–100k users)
+
+| Component | What it replaces | Why |
+|-----------|-----------------|-----|
+| **Redis** | In-process `AntiSpamCache` | In-memory cache is lost on restart and doesn't scale across instances |
+| **Redis Rate Limiter** | In-process token bucket | Rate-limit state must be shared across all app instances |
+| **Redis Session Store** | JWT-only auth | Allows instant token revocation, refresh token rotation with atomic TTL |
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Instance 1  │     │  Instance 2  │     │  Instance N  │     │    Redis     │
+│              │     │              │     │              │     │   Cluster    │
+│ Verdict──────┼─────┤──────────── ┼─────┤──────────────┤     │              │
+│ Cache Miss ──┼─────┤──────────── ┼─────┤──────────────┼────►│ AntiSpamCache│
+│ Rate Check──┼─────┤──────────── ┼─────┤──────────────┼────►│ Rate Buckets │
+│ Refresh─────┼─────┤──────────── ┼─────┤──────────────┼────►│ Token Store  │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
+```
+
+**Key migrations:**
+- `AntiSpamCache` backed by Redis with 5-min TTL (same semantics, persisted across restarts)
+- Rate limiter uses Redis `INCR` + `EXPIRE` with sliding window
+- Refresh tokens stored in Redis with auto-expiry for instant revocation
+
+### 11.2 Phase 2: Horizontal Scaling with Load Balancer (100k–500k users)
+
+```
+                         ┌─────────────────┐
+                         │   AWS ALB / NGINX │
+                         │  (SSL termination) │
+                         │  (Round-robin /    │
+                         │   least-connections)│
+                         └────────┬─────────┘
+                                  │
+              ┌───────────────────┼───────────────────┐
+              │                   │                   │
+              ▼                   ▼                   ▼
+     ┌────────────────┐ ┌────────────────┐ ┌────────────────┐
+     │  App Instance 1 │ │  App Instance 2 │ │  App Instance N │
+     │  Node.js:3000   │ │  Node.js:3000   │ │  Node.js:3000   │
+     └────────┬───────┘ └────────┬────────┘ └────────┬───────┘
+              │                   │                   │
+              └───────────────────┼───────────────────┘
+                                  │
+                                  ▼
+                         ┌─────────────────┐
+                         │  ProxySQL /      │
+                         │  MySQL Router    │
+                         │  (connection pool)│
+                         └────────┬─────────┘
+                                  │
+              ┌───────────────────┼───────────────────┐
+              │                   │                   │
+              ▼                   ▼                   ▼
+     ┌────────────────┐ ┌────────────────┐ ┌────────────────┐
+     │  MySQL Primary  │ │  MySQL Replica │ │  MySQL Replica │
+     │  (write)        │ │  (read-only)   │ │  (read-only)   │
+     └────────────────┘ └────────────────┘ └────────────────┘
+```
+
+**Config changes:**
+- Add `DB_REPLICA_HOST`, `DB_REPLICA_USER`, `DB_REPLICA_PASSWORD` env vars
+- `config/database.ts` exports separate read/write Knex instances
+- Write queries (transfers, funding, registration) → primary
+- Read queries (balance checks, ledger history, user lookup) → replicas
+- ProxySQL in front of MySQL to handle connection pooling and query routing
+
+### 11.3 Phase 3: Async Processing with Message Queue (500k–1M users)
+
+Offload non-critical and audit-path work from the synchronous HTTP request cycle to background workers.
+
+| Current (sync) | Future (async) | Benefit |
+|----------------|---------------|---------|
+| Ledger entries created in request transaction | Committed in transaction, then published to queue | Reduces transaction hold time |
+| Reconciliation triggered on-demand | Scheduled background job via queue | Removes CPU-heavy audit from request path |
+| Email notifications (future) | Dispatched via queue | Prevents external API latency from blocking wallet ops |
+| Webhook delivery (future) | Queued delivery with retry | Reliable integration without blocking transfer |
+
+```
+HTTP Request ──► Controller ──► WalletService ──► Repository ──► MySQL
+                                        │
+                                        ▼
+                                  ┌──────────┐
+                                  │  RabbitMQ │
+                                  │  / Redis  │
+                                  │  Streams  │
+                                  └────┬─────┘
+                                       │
+                          ┌────────────┼────────────┐
+                          │            │            │
+                          ▼            ▼            ▼
+                    ┌──────────┐ ┌──────────┐ ┌──────────┐
+                    │ Ledger   │ │ Recon-   │ │ Webhook  │
+                    │ Worker   │ │ ciliation│ │ Worker   │
+                    └──────────┘ └──────────┘ └──────────┘
+```
+
+**Implementation outline:**
+```typescript
+// After successful DB commit in processTransfer():
+await this.eventBus.publish('wallet.transfer.completed', {
+  transactionRef,
+  senderWalletId,
+  receiverWalletId,
+  amount: normalizedAmount,
+  debitEntryId,
+  creditEntryId,
+});
+```
+
+### 11.4 Phase 4: Database Optimizations for 1M Users
+
+#### Read-Write Splitting
+
+```typescript
+// config/database.ts
+const dbConfig = {
+  writer: knex({ client: 'mysql2', connection: { host: DB_HOST, ... } }),
+  reader: knex({ client: 'mysql2', connection: { host: DB_REPLICA_HOST, ... } }),
+};
+```
+
+#### Sharding Strategy (if single-writer becomes bottleneck)
+
+| Shard Key | Strategy | Partition Count |
+|-----------|----------|----------------|
+| `user_id` (UUID) | Consistent hashing modulo N | 4–8 shards initially |
+| Wallet lookups | Routed by `user_id` shard key | Auto-rebalance via proxy |
+
+#### Query Optimization Checklist
+
+| Pattern | Optimization | Impact |
+|---------|-------------|--------|
+| Ledger pagination | Cursor-based (WHERE created_at < ?) instead of OFFSET | Eliminates full table scans on page N |
+| Balance reads | Cached in Redis with 1s TTL, invalidated on write | 100x reduction in DB reads |
+| User login | bcrypt cost factor tunable per `PASSWORD_SALT_ROUNDS` env var | Tune based on hardware (10–14) |
+| Idempotency check | Covered index on (key, expires_at) with TTL-based partition pruning | Blazing-fast dedup lookups |
+
+#### Index Additions for Scale
+
+```sql
+-- ledger_entries: wallet_id is already indexed, add created_at for cursor pagination
+CREATE INDEX idx_ledger_wallet_created ON ledger_entries (wallet_id, created_at);
+
+-- users: case-insensitive login
+CREATE INDEX idx_users_email_lower ON users ((LOWER(email)));
+
+-- idempotency_keys: fast lookup + auto-expire
+CREATE INDEX idx_idempotency_lookup ON idempotency_keys (key, expires_at);
+```
+
+### 11.5 Phase 5: Observability at Scale
+
+| Tool | Purpose | Why at 1M users |
+|------|---------|-----------------|
+| **Prometheus + Grafana** | Metrics dashboards | Spot bottlenecks before they become incidents |
+| **OpenTelemetry traces** | Distributed tracing | Trace a single transfer across 5+ services |
+| **Structured logging with correlation IDs** | Log aggregation (ELK/Loki) | `X-Request-ID` correlates every log line across instances |
+| **Synthetic health checks** | External monitoring | Simulate user registration + transfer every 60s from outside the cluster |
+| **PagerDuty/On-call** | Alert routing | Reconciliation CRITICALs must page a human |
+
+### 11.6 Cost Estimate for 1M Users
+
+| Tier | Monthly Cost (est.) | Setup |
+|------|--------------------|-------|
+| **Phase 1** (10k–100k) | $200–$500 | 2× app instances, 1× Redis, 1× MySQL db.r6g.large |
+| **Phase 2** (100k–500k) | $1,000–$3,000 | 4–8× app instances, Redis cluster, MySQL primary + 2 replicas |
+| **Phase 3** (500k–1M) | $3,000–$8,000 | 10–20× app instances, RabbitMQ cluster, MySQL sharded, CDN |
+
+All costs estimated for AWS us-east-1 (on-demand, no reserved instances). Reserve instances for 30–50% savings.
+
+---
+
+*Document Version: 1.1.0 | Wallet Engine | Built with TypeScript + Node.js + Express + MySQL | Updated for production deployment on Render*
