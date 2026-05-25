@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "WalletEngine API",
-    "description": "Complete API collection for the WalletEngine service. Authentication uses JWT Bearer tokens obtained from `POST /api/v1/users/authenticate`.\n\nBase URL variable defaults to `http://localhost:3000`. Update it to match your environment.",
+    "description": "Complete API collection for the WalletEngine service. Authentication uses JWT Bearer tokens obtained from `POST /api/v1/users/authenticate`.\n\nBase URL variable defaults to `http://localhost:3000`. Update it to match your environment.\n\nAll user/wallet IDs are UUID v4 strings (e.g., 550e8400-e29b-41d4-a716-446655440000).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "wallet-engine"
   },
@@ -13,21 +13,27 @@
     },
     {
       "key": "authToken",
-      "value": "1",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NTBlODQwMC1lMjliLTQxZDQtYTcxNi00NDY2NTU0NDAwMDAiLCJlbWFpbCI6ImpvaG4uZG9lQGV4YW1wbGUuY29tIiwiaWF0IjoxNzE2MzAwMDAwLCJleHAiOjE3MTYzODY0MDB9.signature",
       "type": "string",
       "description": "JWT token obtained from POST /api/v1/users/authenticate."
     },
     {
       "key": "userId",
-      "value": "1",
+      "value": "550e8400-e29b-41d4-a716-446655440000",
       "type": "string",
-      "description": "Registered user ID"
+      "description": "Registered user ID (UUID v4)"
     },
     {
       "key": "walletId",
-      "value": "1",
+      "value": "123e4567-e89b-12d3-a456-426614174000",
       "type": "string",
-      "description": "Wallet ID for the user"
+      "description": "Wallet ID for the user (UUID v4)"
+    },
+    {
+      "key": "otherUserId",
+      "value": "67b9d64f-3c2a-4e8b-9c1d-2e3f4a5b6c7d",
+      "type": "string",
+      "description": "Another user's ID for transfer testing (UUID v4)"
     },
     {
       "key": "version",
@@ -176,7 +182,7 @@
               "status": "OK",
               "code": 200,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"walletId\": 1,\n    \"balance_in_kobo\": \"50000\",\n    \"currency\": \"NGN\",\n    \"isNew\": false\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"walletId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"balance_in_kobo\": \"50000\",\n    \"currency\": \"NGN\",\n    \"isNew\": false\n  }\n}"
             }
           ]
         },
@@ -213,7 +219,7 @@
               "status": "OK",
               "code": 200,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"FND-1716163200000-A1B2C3D4\",\n    \"userId\": 1,\n    \"amount_in_kobo\": \"10000\",\n    \"new_balance_in_kobo\": \"60000\",\n    \"currency\": \"NGN\",\n    \"creditEntryId\": 5,\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"FND-1716163200000-A1B2C3D4\",\n    \"userId\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"amount_in_kobo\": \"10000\",\n    \"new_balance_in_kobo\": \"60000\",\n    \"currency\": \"NGN\",\n    \"creditEntryId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
             }
           ]
         },
@@ -235,14 +241,14 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"receiverUserId\": 2,\n  \"amount\": \"5000\"\n}"
+              "raw": "{\n  \"receiverUserId\": \"{{otherUserId}}\",\n  \"amount\": \"5000\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/wallet/transfer",
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "wallet", "transfer"]
             },
-            "description": "Transfer funds from the authenticated user's wallet to another user. Uses deterministic lock ordering to prevent deadlocks. Sender and receiver cannot be the same user."
+            "description": "Transfer funds from the authenticated user's wallet to another user. receiverUserId must be a valid UUID v4. Uses deterministic lock ordering to prevent deadlocks. Sender and receiver cannot be the same user."
           },
           "response": [
             {
@@ -250,7 +256,7 @@
               "status": "OK",
               "code": 200,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"TXN-1716163200000-E5F6G7H8\",\n    \"senderUserId\": 1,\n    \"receiverUserId\": 2,\n    \"amount_in_kobo\": \"5000\",\n    \"sender_new_balance_in_kobo\": \"45000\",\n    \"receiver_new_balance_in_kobo\": \"55000\",\n    \"currency\": \"NGN\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"TXN-1716163200000-E5F6G7H8\",\n    \"senderUserId\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"receiverUserId\": \"67b9d64f-3c2a-4e8b-9c1d-2e3f4a5b6c7d\",\n    \"amount_in_kobo\": \"5000\",\n    \"sender_new_balance_in_kobo\": \"45000\",\n    \"receiver_new_balance_in_kobo\": \"55000\",\n    \"currency\": \"NGN\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
             }
           ]
         },
@@ -287,7 +293,7 @@
               "status": "OK",
               "code": 200,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"WTH-1716163200000-I9J0K1L2\",\n    \"userId\": 1,\n    \"amount_in_kobo\": \"5000\",\n    \"new_balance_in_kobo\": \"45000\",\n    \"currency\": \"NGN\",\n    \"debitEntryId\": 6,\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"transactionRef\": \"WTH-1716163200000-I9J0K1L2\",\n    \"userId\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"amount_in_kobo\": \"5000\",\n    \"new_balance_in_kobo\": \"45000\",\n    \"currency\": \"NGN\",\n    \"debitEntryId\": \"b2c3d4e5-f6a7-8901-bcde-f12345678901\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
             }
           ]
         },
@@ -315,14 +321,14 @@
               "status": "OK",
               "code": 200,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"success\",\n  \"code\": \"BALANCE_RECONCILED\",\n  \"data\": {\n    \"walletId\": 1,\n    \"ledger_sum_in_kobo\": \"50000\",\n    \"cached_balance_in_kobo\": \"50000\",\n    \"isBalanced\": true,\n    \"discrepancy_in_kobo\": \"0\",\n    \"currency\": \"NGN\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"code\": \"BALANCE_RECONCILED\",\n  \"data\": {\n    \"walletId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"ledger_sum_in_kobo\": \"50000\",\n    \"cached_balance_in_kobo\": \"50000\",\n    \"isBalanced\": true,\n    \"discrepancy_in_kobo\": \"0\",\n    \"currency\": \"NGN\"\n  }\n}"
             },
             {
               "name": "409 Mismatch",
               "status": "Conflict",
               "code": 409,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"error\",\n  \"code\": \"BALANCE_MISMATCH\",\n  \"data\": {\n    \"walletId\": 1,\n    \"ledger_sum_in_kobo\": \"49000\",\n    \"cached_balance_in_kobo\": \"50000\",\n    \"isBalanced\": false,\n    \"discrepancy_in_kobo\": \"1000\",\n    \"currency\": \"NGN\"\n  }\n}"
+              "body": "{\n  \"status\": \"error\",\n  \"code\": \"BALANCE_MISMATCH\",\n  \"data\": {\n    \"walletId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"ledger_sum_in_kobo\": \"49000\",\n    \"cached_balance_in_kobo\": \"50000\",\n    \"isBalanced\": false,\n    \"discrepancy_in_kobo\": \"1000\",\n    \"currency\": \"NGN\"\n  }\n}"
             }
           ]
         }
@@ -360,7 +366,7 @@
               "status": "Created",
               "code": 201,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"userId\": 1,\n    \"walletId\": 1,\n    \"email\": \"john.doe@example.com\",\n    \"balance\": \"0\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"userId\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"walletId\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"email\": \"john.doe@example.com\",\n    \"balance\": \"0\",\n    \"timestamp\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
             },
             {
               "name": "400 Validation Error",
@@ -398,7 +404,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "users", "authenticate"]
             },
-            "description": "Authenticate a user with email and password. Returns userId and a token (the userId as a string). No authentication required."
+            "description": "Authenticate a user with email and password. Returns userId (UUID) and a JWT token. Set the returned token as authToken variable for subsequent requests."
           },
           "response": [
             {
@@ -406,7 +412,7 @@
               "status": "OK",
               "code": 200,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"userId\": 1,\n    \"email\": \"john.doe@example.com\",\n    \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"userId\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"email\": \"john.doe@example.com\",\n    \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NTBlODQwMC1lMjliLTQxZDQtYTcxNi00NDY2NTU0NDAwMDAiLCJlbWFpbCI6ImpvaG4uZG9lQGV4YW1wbGUuY29tIiwiaWF0IjoxNzE2MzAwMDAwLCJleHAiOjE3MTYzODY0MDB9.Rt4zjisvPw_T5ZIC1D5QiCjIS548qzLPclT7tqj6oJE\"\n  }\n}"
             },
             {
               "name": "401 Invalid Credentials",
@@ -441,7 +447,7 @@
               "status": "OK",
               "code": 200,
               "header": [{ "key": "Content-Type", "value": "application/json" }],
-              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"id\": 1,\n    \"email\": \"john.doe@example.com\",\n    \"createdAt\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"data\": {\n    \"id\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"email\": \"john.doe@example.com\",\n    \"createdAt\": \"2026-05-21T07:00:00.000Z\"\n  }\n}"
             }
           ]
         }

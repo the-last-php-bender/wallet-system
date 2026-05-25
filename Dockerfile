@@ -29,8 +29,8 @@ RUN npm ci --only=production
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
 
-# Expose port
-EXPOSE 3000
+# Expose ports: 3000 = API, 9464 = OpenTelemetry Prometheus (optional)
+EXPOSE 3000 9464
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \

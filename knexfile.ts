@@ -15,6 +15,7 @@ const databasePort = parseInt(process.env.DB_PORT ?? '3306', 10);
 const databaseName = process.env.DB_NAME ?? 'wallet_engine';
 const databaseUser = process.env.DB_USER ?? 'wallet_user';
 const databasePassword = process.env.DB_PASSWORD ?? 'walletsecretpassword';
+const useSSL = process.env.DB_SSL === 'true' || process.env.NODE_ENV === 'production';
 
 const knexConfig: KnexConfig = {
   development: {
@@ -26,7 +27,8 @@ const knexConfig: KnexConfig = {
       user: databaseUser,
       password: databasePassword,
       charset: 'utf8mb4',
-      connectTimeout: 5000,
+      connectTimeout: 10000,
+      ...(useSSL ? { ssl: { rejectUnauthorized: false } } : {}),
     },
     pool: {
       min: 2,
@@ -88,7 +90,8 @@ const knexConfig: KnexConfig = {
       user: databaseUser,
       password: databasePassword,
       charset: 'utf8mb4',
-      connectTimeout: 5000,
+      connectTimeout: 10000,
+      ...(useSSL ? { ssl: { rejectUnauthorized: false } } : {}),
     },
     pool: {
       min: 5,
@@ -117,8 +120,8 @@ const knexConfig: KnexConfig = {
       user: databaseUser,
       password: databasePassword,
       charset: 'utf8mb4',
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-      connectTimeout: 5000,
+      connectTimeout: 10000,
+      ...(useSSL ? { ssl: { rejectUnauthorized: false } } : {}),
     },
     pool: {
       min: 10,
