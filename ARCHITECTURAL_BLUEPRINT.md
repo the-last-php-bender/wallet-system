@@ -1,6 +1,6 @@
 # Scientific Finance Wallet Engine
 ## Architectural Blueprint & Documentation Manual
-### Version 1.0.0 | TypeScript + Node.js + Express + PostgreSQL + PgBouncer
+### Version 1.2.0 | TypeScript + Node.js + Express + MySQL 8.0
 
 ---
 
@@ -13,9 +13,8 @@
 5. [Process Lifecycle & Graceful Cleanup](#5-process-lifecycle--graceful-cleanup)
 6. [Module Reference](#6-module-reference)
 7. [Database Schema & Migrations](#7-database-schema--migrations)
-8. [Infrastructure Configuration](#8-infrastructure-configuration)
-9. [Security & Observability](#9-security--observability)
-10. [Testing Strategy](#10-testing-strategy)
+8. [Security & Observability](#8-security--observability)
+9. [Testing Strategy](#9-testing-strategy)
 
 ---
 
@@ -30,8 +29,7 @@ The Wallet Engine is a high-concurrency, financial-grade transactional system bu
 | Runtime | Node.js | ≥20.0.0 |
 | Language | TypeScript | 5.5.3 |
 | HTTP Framework | Express | 4.19.2 |
-| Database | PostgreSQL | 15 (Alpine) |
-| Connection Pooler | PgBouncer | 1.22 |
+| Database | MySQL | 8.0 |
 | Query Builder | Knex.js | 3.1.0 |
 | Decimal Arithmetic | Decimal.js | 10.4.3 |
 | Validation | Joi | 17.13.3 |
@@ -76,8 +74,7 @@ wallet-system/
 │   │   ├── secrets/
 │   │   │   └── secrets.manager.ts     # Secrets management
 │   │   ├── telemetry/
-│   │   │   ├── metrics.ts             # Prometheus metrics (prom-client)
-│   │   │   └── tracing.ts             # OpenTelemetry tracing
+│   │   │   └── metrics.ts             # Prometheus metrics (prom-client)
 │   │   ├── utils/
 │   │   │   ├── express.ts             # Express utility helpers
 │   │   │   └── money.ts               # Kobo-based monetary arithmetic (bigint)
@@ -115,7 +112,7 @@ wallet-system/
 │   ├── environment.ts                  # Strongly-typed environment validation
 │   └── database.ts                    # Knex singleton with afterCreate hooks
 ├── database/
-│   ├── migrations/                    # PostgreSQL DDL migration scripts
+│   ├── migrations/                    # MySQL DDL migration scripts
 │   │   ├── 20250601000001_create_users_table.ts
 │   │   ├── 20250601000002_create_wallets_table.ts
 │   │   ├── 20250601000003_create_ledger_entries_table.ts
@@ -123,13 +120,6 @@ wallet-system/
 │   │   └── 20250601000005_harden_db_constraints.ts
 │   └── seeds/
 │       └── 01_demo_data.ts
-├── docker/
-│   ├── postgres/
-│   │   ├── conf.d/postgresql.conf     # Tuned PostgreSQL parameters
-│   │   └── init.d/01-init.sql         # Extensions, roles, grants
-│   └── pgbouncer/
-│       ├── pgbouncer.ini               # Transaction mode pool configuration
-│       └── userlist.txt                # MD5-authenticated credentials
 ├── tests/
 │   ├── jest.config.json                # Jest test configuration
 │   ├── setup.ts                        # Jest global setup with env vars
@@ -141,7 +131,6 @@ wallet-system/
 │       └── user.api.test.ts            # Supertest HTTP integration tests
 ├── scripts/
 │   └── dev.ps1                         # Development startup script
-├── docker-compose.yml                  # Postgres + PgBouncer orchestration
 ├── knexfile.ts                         # Multi-environment Knex config
 ├── package.json                        # Dependencies & scripts
 ├── tsconfig.json                       # Strict TypeScript config
@@ -303,7 +292,7 @@ public async calculateAuditBalance(walletId: number): Promise<ReconciliationResu
 
 Enforced by:
 - The `wallets` table has **no UPDATE trigger** for balance changes in the application layer — all balance mutations flow through the repository which creates a ledger entry alongside any balance update.
-- Ledger entries use a custom PostgreSQL enum type `ledger_entry_type` with values `'DEBIT'` and `'CREDIT'`.
+- Ledger entries use a custom MySQL ENUM type `ledger_entry_type` with values `'DEBIT'` and `'CREDIT'`.
 - The `ledger_entries` table uses `ON DELETE RESTRICT` on the `wallet_id` foreign key, preventing deletion of a wallet while audit entries exist.
 
 ```typescript
@@ -331,7 +320,7 @@ const creditEntry = await this.ledgerRepository.createEntry({
 > **Concurrent transactions competing for the same wallet resources must acquire locks in a globally deterministic sequence to prevent deadlocks.**
 
 Enforced by:
-- `findByUserIdForUpdate()` wraps the wallet SELECT query with PostgreSQL's `FOR UPDATE` clause, acquiring a row-level exclusive lock.
+- `findByUserIdForUpdate()` wraps the wallet SELECT query with MySQL's `FOR UPDATE` clause, acquiring a row-level exclusive lock.
 - Before locking, user IDs are sorted: `[firstId, secondId] = senderId < receiverId ? [senderId, receiverId] : [receiverId, senderId]`.
 - This ensures that whichever direction the transfer flows (A→B or B→A), both transactions will always lock user A's wallet first, then user B's wallet — **never in reverse order**.
 
@@ -461,7 +450,7 @@ The `BlacklistModule` wraps the `AdjutorProvider` behind an **Opossum Circuit Br
 | `errorPercentageThreshold` | 50% | `CIRCUIT_BREAKER_ERROR_PERCENTAGE_THRESHOLD` |
 | `volumeThreshold` | 5 | `CIRCUIT_BREAKER_VOLUME_THRESHOLD` |
 | `resetTimeout` | 60,000ms | Auto-assigned |
-| Pool Mode | Transaction | PgBouncer config |
+
 
 #### Circuit Breaker State Machine
 
@@ -592,22 +581,7 @@ For `/transfer` endpoints, the system handles brute-force transaction spikes thr
 
 3. **InsufficientFundsException Early Exit**: When a wallet has insufficient balance, the transaction is rolled back immediately at the database level without completing the full transfer workflow. This releases the lock quickly, allowing the next queued transfer to proceed.
 
-4. **PgBouncer Transaction Mode**: PgBouncer in transaction mode (`pool_mode = transaction`) multiplexes hundreds of application connections over a small pool of real database connections. This means even under heavy spike traffic (e.g., 10,000 concurrent transfer requests), the system does not create 10,000 simultaneous database connections — PgBouncer queues them on ~20 real connections, preventing connection exhaustion.
-
-```yaml
-# PgBouncer transaction mode configuration
-wallet-pgbouncer:
-  environment:
-    POOL_MODE: transaction
-    MAX_CLIENT_CONN: "200"
-    DEFAULT_POOL_SIZE: "20"
-    MIN_POOL_SIZE: "5"
-    RESERVE_POOL_SIZE: "5"
-    RESERVE_POOL_TIMEOUT: "5"
-    MAX_DB_CONNECTIONS: "100"
-    SERVER_LIFETIME: "3600"
-    SERVER_IDLE_TIMEOUT: "600"
-```
+4. **Connection Pooling**: Knex.js manages a pool of database connections (min=2, max=10). Under heavy spike traffic (e.g., 10,000 concurrent transfer requests), the database-level `FOR UPDATE` locking serializes access to contended wallet rows, ensuring data integrity without overwhelming the database with active connections.
 
 ### 4.4 Security Header Enforcement
 
@@ -695,8 +669,7 @@ Signal received (SIGTERM | SIGINT | SIGUSR2)
     ┌─ Phase 2: closeDatabasePool() ─────────────────────────────┐
     │  await db.destroy()                                          │
     │  // Closes all Knex connection pool sockets                 │
-    │  // Returns connections to PgBouncer                         │
-    │  // PgBouncer returns them to PostgreSQL                    │
+    │  // Returns connections to the database pool                │
     └──────────────────────────────────────────────────────────────┘
               │
               ▼
@@ -724,29 +697,6 @@ Signal received (SIGTERM | SIGINT | SIGUSR2)
     │  Clean zero-exit  │
     │  termination      │
     └───────────────────┘
-```
-
-### 6.3 PgBouncer Connection Drain Sequence
-
-When `db.destroy()` is called, the following sequence occurs at the infrastructure level:
-
-```
-Knex Connection Pool (Node.js)
-  └─ Acquires all active connections
-  └─ Executes any pending queries (with timeout)
-  └─ Closes each connection socket
-
-PgBouncer (Transaction Mode)
-  └─ Sees connections close
-  └─ Returns slots to available pool
-  └─ Decrements active connection count
-  └─ Does NOT close real database connections (pooled)
-
-PostgreSQL (wallet-db)
-  └─ Detects socket closure from PgBouncer
-  └─ Backend process terminates cleanly
-  └─ No orphaned connections
-  └─ Connection slot freed in max_connections
 ```
 
 ### 5.4 Pino Diagnostic Telemetry During Shutdown
@@ -779,7 +729,7 @@ process.exit(0);
 
 ---
 
-## 7. Module Reference
+## 6. Module Reference
 
 ### 6.1 Application Module (`app.ts`)
 
@@ -873,7 +823,7 @@ Creates the `users` table with email and BVN uniqueness constraints using UUID p
 | `updated_at` | `DATETIME(6)` | `NOT NULL DEFAULT CURRENT_TIMESTAMP(6)` | Updated on modification |
 
 **Indexes:**
-- `idx_users_email ON users ((lower(email::text)))` — Case-insensitive email lookup
+- `idx_users_email ON users ((lower(email)))` — Case-insensitive email lookup
 - `idx_users_bvn ON users (bvn)` — BVN direct lookup
 
 #### Migration 2: `20250601000002_create_wallets_table.ts`
@@ -918,110 +868,11 @@ All monetary fields use `DECIMAL(20,4)` — 20 total digits, 4 decimal places. T
 - **Range**: Up to `99,999,999,999,999,999.9999` (approximately 100 quadrillion)
 - **Precision**: Exactly 4 decimal places (0.0001 precision, equivalent to 1/10,000 of the base currency unit)
 - **No rounding errors**: Unlike `FLOAT` or `DOUBLE`, `DECIMAL` arithmetic is exact in SQL
-- **Decimal.js alignment**: Both PostgreSQL `DECIMAL(20,4)` and `Decimal.js` use the same 4-decimal precision, preventing cross-boundary precision loss
+- **Decimal.js alignment**: Both MySQL `DECIMAL(20,4)` and `Decimal.js` use the same 4-decimal precision, preventing cross-boundary precision loss
 
 ---
 
-## 8. Infrastructure Configuration
-
-### 8.1 Docker Compose Service Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    wallet_network (bridge)                       │
-│                     172.28.0.0/16 subnet                        │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                    wallet-db                              │  │
-│  │              postgres:15-alpine                            │  │
-│  │              Port: 5433 (host)                           │  │
-│  │              Internal: 5432                               │  │
-│  │              max_connections: 200                          │  │
-│  │              shared_buffers: 128MB                        │  │
-│  │              healthcheck: pg_isready                       │  │
-│  └──────────────────────────┬─────────────────────────────────┘  │
-│                             │                                     │
-│                      Port: 5432                                   │
-│                       (internal)                                   │
-│                             │                                     │
-│  ┌──────────────────────────▼─────────────────────────────────┐  │
-│  │                  wallet-pgbouncer                           │  │
-│  │                 edoburu/pgbouncer:1.22                     │  │
-│  │                 Port: 5432 (host)                          │  │
-│  │                 pool_mode: transaction                     │  │
-│  │                 max_client_conn: 200                         │  │
-│  │                 default_pool_size: 20                       │  │
-│  │                 healthcheck: pgbouncer -V                   │  │
-│  └──────────────────────────┬─────────────────────────────────┘  │
-│                             │                                     │
-│                      Port: 5432                                   │
-│                    (exposed to host)                              │
-│                             │                                     │
-│                    Node.js Application                           │
-│                    (connects here)                                 │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 8.2 PgBouncer Pool Configuration
-
-| Parameter | Value | Implication |
-|-----------|-------|-------------|
-| `pool_mode` | `transaction` | Connections are only held during a transaction, maximizing multiplexing |
-| `max_client_conn` | `200` | Up to 200 application-level connections can connect to PgBouncer |
-| `default_pool_size` | `20` | Each user/database pair gets 20 real PostgreSQL connections |
-| `min_pool_size` | `5` | PgBouncer maintains at least 5 connections even when idle |
-| `reserve_pool_size` | `5` | Extra connections available for burst traffic |
-| `reserve_pool_timeout` | `5s` | Extra connections returned after 5 seconds of idle |
-| `max_db_connections` | `100` | Maximum connections per database across all pools |
-| `server_lifetime` | `3600s` | Real connections rotated every hour |
-| `server_idle_timeout` | `600s` | Idle connections closed after 10 minutes |
-| `server_connect_query` | `SELECT 1` | Connection health check on acquire |
-
-### 8.3 Node.js → PgBouncer Connection Flow
-
-```
-Application Layer
-  │
-  ├─ Knex.js Connection Pool (min=2, max=10)
-  │    ├─ Manages up to 10 logical connections in-process
-  │    ├─ acquireTimeoutMillis: 10000 (10s to get a connection)
-  │    └─ afterCreate: SET datestyle, timezone, client_encoding, lock_timeout
-  │
-  └─► TCP: localhost:5432 ──► PgBouncer (wallets-pgbouncer:5432)
-       │
-       ├─► max_client_conn: 200
-       │    └─ Up to 200 application connections multiplexed
-       │
-       └─► default_pool_size: 20
-            └─► Real PostgreSQL connections: 20
-                 └─► Database: wallet_engine
-                      └─► max_connections: 200 (PostgreSQL setting)
-```
-
-### 8.4 PostgreSQL Tuning Parameters
-
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `max_connections` | 200 | Total backend processes |
-| `shared_buffers` | 128MB | Memory for caching relation data |
-| `effective_cache_size` | 256MB | Planner's estimate of available cache |
-| `work_mem` | 4MB | Memory per sort/hash operation |
-| `maintenance_work_mem` | 64MB | Memory for VACUUM, CREATE INDEX |
-| `random_page_cost` | 1.1 | SSD-friendly sequential scan preference |
-| `effective_io_concurrency` | 200 | Parallel I/O for bitmap scans |
-| `max_worker_processes` | 8 | Parallel query parallelism |
-| `max_parallel_workers_per_gather` | 4 | Workers per parallel node |
-| `statement_timeout` | 30s | Hard query timeout |
-| `lock_timeout` | 10s | Lock wait timeout |
-| `deadlock_timeout` | 1s | Deadlock detection interval |
-| `idle_in_transaction_session_timeout` | 60s | Auto-rollback of idle transactions |
-| `full_page_writes` | off | PostgreSQL 15 optimization |
-| `wal_compression` | off | PostgreSQL 15 optimization |
-
----
-
-## 9. Security & Observability
+## 8. Security & Observability
 
 ### 9.1 Security Controls Matrix
 
@@ -1126,9 +977,9 @@ This enables any Prometheus-compatible monitoring stack to scrape the service an
 
 ---
 
-## 11. Testing Strategy
+## 9. Testing Strategy
 
-### 11.1 Unit Testing: Zero-Database Pattern
+### 9.1 Unit Testing: Zero-Database Pattern
 
 All unit tests use **interface-based in-memory test doubles** that fully implement the repository interfaces without loading any database driver or opening network connections:
 
@@ -1152,7 +1003,7 @@ class InMemoryWalletRepository implements IWalletRepository {
 - Complete control over test data state
 - Interface contract compliance verified by TypeScript compiler
 
-### 10.2 Unit Test Coverage Areas
+### 9.2 Unit Test Coverage Areas
 
 | Test Suite | File | Coverage |
 |------------|------|----------|
@@ -1165,7 +1016,7 @@ class InMemoryWalletRepository implements IWalletRepository {
 | Reconciliation Mismatch | `wallet.service.test.ts` | CRITICAL log emitted on discrepancy |
 | Interface Contract Compliance | `wallet.service.test.ts` | `IWalletRepository` and `ILedgerRepository` satisfied by in-memory doubles |
 
-### 10.3 Integration Testing: Supertest HTTP Tests
+### 9.3 Integration Testing: Supertest HTTP Tests
 
 Integration tests run against the live Express application (with mocked database layer) using `supertest`:
 
@@ -1194,11 +1045,9 @@ expect(response.body.data.userId).toBeDefined();
 
 ---
 
-## 11. Scaling to One Million Users
+## 10. Scaling to One Million Users
 
-The current architecture supports moderate throughput on a single instance. To reach **1 million active users** with sub-second response times and financial-grade integrity, the following additions are recommended in priority order.
-
-### 11.1 Phase 1: Distributed Caching with Redis (10k–100k users)
+### 10.1 Phase 1: Distributed Caching with Redis (10k–100k users)
 
 | Component | What it replaces | Why |
 |-----------|-----------------|-----|
@@ -1222,7 +1071,7 @@ The current architecture supports moderate throughput on a single instance. To r
 - Rate limiter uses Redis `INCR` + `EXPIRE` with sliding window
 - Refresh tokens stored in Redis with auto-expiry for instant revocation
 
-### 11.2 Phase 2: Horizontal Scaling with Load Balancer (100k–500k users)
+### 10.2 Phase 2: Horizontal Scaling with Load Balancer (100k–500k users)
 
 ```
                          ┌─────────────────┐
@@ -1265,7 +1114,7 @@ The current architecture supports moderate throughput on a single instance. To r
 - Read queries (balance checks, ledger history, user lookup) → replicas
 - ProxySQL in front of MySQL to handle connection pooling and query routing
 
-### 11.3 Phase 3: Async Processing with Message Queue (500k–1M users)
+### 10.3 Phase 3: Async Processing with Message Queue (500k–1M users)
 
 Offload non-critical and audit-path work from the synchronous HTTP request cycle to background workers.
 
@@ -1308,7 +1157,7 @@ await this.eventBus.publish('wallet.transfer.completed', {
 });
 ```
 
-### 11.4 Phase 4: Database Optimizations for 1M Users
+### 10.4 Phase 4: Database Optimizations for 1M Users
 
 #### Read-Write Splitting
 
@@ -1349,17 +1198,16 @@ CREATE INDEX idx_users_email_lower ON users ((LOWER(email)));
 CREATE INDEX idx_idempotency_lookup ON idempotency_keys (key, expires_at);
 ```
 
-### 11.5 Phase 5: Observability at Scale
+### 10.5 Phase 5: Observability at Scale
 
 | Tool | Purpose | Why at 1M users |
 |------|---------|-----------------|
 | **Prometheus + Grafana** | Metrics dashboards | Spot bottlenecks before they become incidents |
-| **OpenTelemetry traces** | Distributed tracing | Trace a single transfer across 5+ services |
 | **Structured logging with correlation IDs** | Log aggregation (ELK/Loki) | `X-Request-ID` correlates every log line across instances |
 | **Synthetic health checks** | External monitoring | Simulate user registration + transfer every 60s from outside the cluster |
 | **PagerDuty/On-call** | Alert routing | Reconciliation CRITICALs must page a human |
 
-### 11.6 Cost Estimate for 1M Users
+### 10.6 Cost Estimate for 1M Users
 
 | Tier | Monthly Cost (est.) | Setup |
 |------|--------------------|-------|
@@ -1371,4 +1219,4 @@ All costs estimated for AWS us-east-1 (on-demand, no reserved instances). Reserv
 
 ---
 
-*Document Version: 1.1.0 | Wallet Engine | Built with TypeScript + Node.js + Express + MySQL | Updated for production deployment on Render*
+*Document Version: 1.2.0 | Wallet Engine | Built with TypeScript + Node.js + Express + MySQL 8.0 | Updated for production deployment on Render*
