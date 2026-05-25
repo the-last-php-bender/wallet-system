@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { config } from '../../../config/environment';
 import { RepositoryException } from '../../common/exceptions/repository.exception';
 import { ErrorCode } from '../../common/enums';
+import { idGenerator } from '../../common/utils/id-generator';
 
 export interface UserRecord {
   id: string;
@@ -48,27 +49,26 @@ export class UserRepository {
     const preHashedPassword = this.hashPasswordBeforeBcrypt(trimmedPassword);
     const passwordHash = await bcrypt.hash(preHashedPassword, SALT_ROUNDS);
 
-    const userId = crypto.randomUUID();
+    const userId = idGenerator.generate();
+    const now = new Date();
 
     await trx<UserRecord>('users').insert({
       id: userId,
       email: normalizedEmail,
       bvn: normalizedBvn,
       password_hash: passwordHash,
+      created_at: now,
+      updated_at: now,
     });
 
-    const insertedUser = await trx<UserRecord>('users')
-      .where('id', userId)
-      .first();
-
-    if (!insertedUser) {
-      throw new RepositoryException(
-        'User creation failed.',
-        `Insert did not return a user row for email=${normalizedEmail}`
-      );
-    }
-
-    return insertedUser as UserRecord;
+    return {
+      id: userId,
+      email: normalizedEmail,
+      bvn: normalizedBvn,
+      password_hash: passwordHash,
+      created_at: now,
+      updated_at: now,
+    };
   }
 
   public async findById(

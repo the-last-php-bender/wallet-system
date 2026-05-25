@@ -1,7 +1,8 @@
 import type { Knex } from 'knex';
-import crypto from 'crypto';
 import { LedgerEntryType, SortOrder } from '../../common/enums';
 import { RepositoryException } from '../../common/exceptions/repository.exception';
+import { parseBalance, normalizeBalance } from '../../common/utils/money';
+import { idGenerator } from '../../common/utils/id-generator';
 
 export interface CreateLedgerEntryParams {
   walletId: string;
@@ -17,6 +18,13 @@ export interface LedgerEntryRecord {
   type: LedgerEntryType;
   description: string;
   created_at: Date;
+}
+
+function normalizeLedgerEntryRecord(entry: LedgerEntryRecord): LedgerEntryRecord {
+  return {
+    ...entry,
+    amount: normalizeBalance(entry.amount),
+  };
 }
 
 export class LedgerRepository {
@@ -35,7 +43,7 @@ export class LedgerRepository {
 
     let validatedAmount: bigint;
     try {
-      validatedAmount = BigInt(amount);
+      validatedAmount = parseBalance(amount);
     } catch {
       throw new RepositoryException(
         'Invalid amount format for ledger entry.',
@@ -66,7 +74,8 @@ export class LedgerRepository {
     }
 
     const normalizedAmount = validatedAmount.toString();
-    const entryId = crypto.randomUUID();
+    const entryId = idGenerator.generate();
+    const now = new Date();
 
     await trx<LedgerEntryRecord>('ledger_entries').insert({
       id: entryId,
@@ -74,20 +83,17 @@ export class LedgerRepository {
       amount: normalizedAmount,
       type: type,
       description: trimmedDescription,
+      created_at: now,
     });
 
-    const insertedEntry = await trx<LedgerEntryRecord>('ledger_entries')
-      .where('id', entryId)
-      .first();
-
-    if (!insertedEntry) {
-      throw new RepositoryException(
-        'Ledger entry creation failed.',
-        `Insert did not return a ledger entry row for walletId=${walletId}.`
-      );
-    }
-
-    return insertedEntry as LedgerEntryRecord;
+    return {
+      id: entryId,
+      wallet_id: walletId,
+      amount: normalizedAmount,
+      type: type,
+      description: trimmedDescription,
+      created_at: now,
+    };
   }
 
   public async sumByWalletId(walletId: string, trx: Knex.Transaction): Promise<string> {
@@ -114,7 +120,7 @@ export class LedgerRepository {
       .first();
 
     const value = (result as unknown as Record<string, unknown>)?.net_balance;
-    return value == null ? '0' : String(value);
+    return value == null ? '0' : normalizeBalance(String(value));
   }
 
   public async findByWalletId(
@@ -154,7 +160,8 @@ export class LedgerRepository {
       .limit(limit)
       .offset(offset);
 
-    return query as Promise<LedgerEntryRecord[]>;
+    const entries = await query;
+    return entries.map(normalizeLedgerEntryRecord);
   }
 
   public async countByWalletId(walletId: string, trx: Knex.Transaction): Promise<number> {

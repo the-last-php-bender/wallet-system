@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "WalletEngine API",
-    "description": "Complete API collection for the WalletEngine service. Authentication uses JWT Bearer tokens obtained from `POST /api/v1/users/authenticate`.\n\nBase URL variable defaults to `http://localhost:3000`. Update it to match your environment.\n\nAll user/wallet IDs are UUID v4 strings (e.g., 550e8400-e29b-41d4-a716-446655440000).",
+    "description": "Complete API collection for the WalletEngine service. Authentication uses JWT Bearer tokens obtained from `POST /api/v1/users/authenticate`.\n\nBase URL variable defaults to `http://localhost:3000`. Update it to match your environment.\n\n**IMPORTANT: All monetary values are in KOBO (1 Naira = 100 kobo).** All amounts are integer strings (e.g., \"10000\" = 100.00 Naira). No decimals are used anywhere in the system. The frontend is responsible for converting kobo to/from any display format.\n\nAll user/wallet IDs are UUID v4 strings (e.g., 550e8400-e29b-41d4-a716-446655440000).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "wallet-engine"
   },
@@ -211,7 +211,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "wallet", "fund"]
             },
-            "description": "Fund (credit) the authenticated user's wallet. Amount must be a positive integer amount in kobo, max 999999999999999999."
+            "description": "Fund (credit) the authenticated user's wallet. Amount must be a positive integer in kobo (1 Naira = 100 kobo). Example: amount=\"10000\" = 100.00 Naira. No decimals allowed — the frontend is responsible for all display conversions."
           },
           "response": [
             {

@@ -67,10 +67,18 @@ export function subtractKobo(a: bigint, b: bigint): bigint {
 
 /**
  * Parses a wallet balance string to bigint.
+ * Handles both integer strings ("0", "100") and decimal formats ("0.0000", "100.0000") from MySQL DECIMAL columns.
+ * Since we work strictly in kobo (whole numbers), any decimal portion is stripped.
  */
 export function parseBalance(balanceStr: string): bigint {
   try {
-    return BigInt(balanceStr);
+    const trimmed = balanceStr.trim();
+    const dotIndex = trimmed.indexOf('.');
+    if (dotIndex !== -1) {
+      const integerPart = trimmed.slice(0, dotIndex) || '0';
+      return BigInt(integerPart);
+    }
+    return BigInt(trimmed);
   } catch {
     throw new Error(`Invalid balance format: "${balanceStr}"`);
   }
@@ -81,4 +89,18 @@ export function parseBalance(balanceStr: string): bigint {
  */
 export function koboToString(amount: bigint): string {
   return amount.toString();
+}
+
+/**
+ * Normalizes a balance string from MySQL DECIMAL format (e.g., "0.0000") to integer kobo string (e.g., "0").
+ * Strips any decimal portion since we work strictly in whole kobo.
+ */
+export function normalizeBalance(balanceStr: string): string {
+  const trimmed = balanceStr.trim();
+  const dotIndex = trimmed.indexOf('.');
+  if (dotIndex !== -1) {
+    const integerPart = trimmed.slice(0, dotIndex);
+    return integerPart === '' ? '0' : integerPart;
+  }
+  return trimmed;
 }

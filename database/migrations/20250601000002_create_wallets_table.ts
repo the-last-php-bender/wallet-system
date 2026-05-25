@@ -4,7 +4,7 @@ export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('wallets', (table) => {
     table.string('id', 36).primary();
     table.string('user_id', 36).notNullable().unique();
-    table.specificType('balance', 'decimal(20,4)').defaultTo('0.0000').notNullable();
+    table.string('balance', 64).defaultTo('0').notNullable();
     table.datetime('created_at', { precision: 6 }).defaultTo(knex.raw('CURRENT_TIMESTAMP(6)')).notNullable();
     table.datetime('updated_at', { precision: 6 }).defaultTo(knex.raw('CURRENT_TIMESTAMP(6)')).notNullable();
 

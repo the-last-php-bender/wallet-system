@@ -31,7 +31,6 @@ The Wallet Engine is a high-concurrency, financial-grade transactional system bu
 | HTTP Framework | Express | 4.19.2 |
 | Database | MySQL | 8.0 |
 | Query Builder | Knex.js | 3.1.0 |
-| Decimal Arithmetic | Decimal.js | 10.4.3 |
 | Validation | Joi | 17.13.3 |
 | Circuit Breaker | Opossum | 8.1.4 |
 | Logging | Pino | 9.3.2 |
@@ -260,23 +259,25 @@ The Wallet Engine is governed by three immutable physical laws of money that are
 Enforced by:
 - Every `processTransfer()` call creates a paired DEBIT entry on the sender's wallet and a paired CREDIT entry on the receiver's wallet with identical amounts.
 - The `calculateAuditBalance()` reconciliation engine sums all ledger entries for a wallet and compares the aggregate to the cached `wallets.balance` field. Any mismatch triggers a CRITICAL alarm.
-- `Decimal.js` is used for all monetary arithmetic, ensuring that `0.1 + 0.2 === 0.3` (unlike IEEE 754 floating-point).
+- JavaScript `bigint` is used for all monetary arithmetic — no floating-point, no decimal libraries, perfect precision.
 
 ```typescript
-public async calculateAuditBalance(walletId: number): Promise<ReconciliationResult> {
+public async calculateAuditBalance(walletId: string): Promise<ReconciliationResult> {
   const ledgerSumResult = await this.ledgerRepository.sumByWalletId(walletId, mockTrx);
-  const ledgerSum = new Decimal(ledgerSumResult);
-  const cachedBalance = new Decimal(wallet.balance);
-  const discrepancy = ledgerSum.minus(cachedBalance).abs();
-  const isBalanced = discrepancy.lessThan('0.0001'); // 0.0001 tolerance for DECIMAL(20,4)
+  const ledgerSum = BigInt(ledgerSumResult);
+  const cachedBalance = BigInt(wallet.balance);
+  const discrepancy = ledgerSum > cachedBalance 
+    ? ledgerSum - cachedBalance 
+    : cachedBalance - ledgerSum;
+  const isBalanced = discrepancy === 0n;
 
   if (!isBalanced) {
     ErrorLogger.log('fatal', 'CRITICAL: Wallet balance mismatch detected - possible data corruption',
       new Error('RECONCILIATION_FAILURE'), {
         walletId,
-        ledgerSum: ledgerSum.toFixed(4),
-        cachedBalance: cachedBalance.toFixed(4),
-        discrepancy: discrepancy.toFixed(4),
+        ledgerSum: ledgerSum.toString(),
+        cachedBalance: cachedBalance.toString(),
+        discrepancy: discrepancy.toString(),
         severity: 'CRITICAL',
         alertType: 'BALANCE_MISMATCH',
         requiresInvestigation: true,
@@ -805,7 +806,69 @@ process.exit(0);
      ON DELETE CASCADE           ON DELETE RESTRICT                ON DELETE RESTRICT
 ```
 
-Note: All primary and foreign keys now use UUID (v4) instead of auto-incrementing integers (SERIAL). The `wallets.user_id` foreign key references `users.id` with `ON DELETE CASCADE`, and `ledger_entries.wallet_id` references `wallets.id` with `ON DELETE RESTRICT`.
+Note: All primary and foreign keys use UUID (v4) instead of auto-incrementing integers (SERIAL). The `wallets.user_id` foreign key references `users.id` with `ON DELETE CASCADE`, and `ledger_entries.wallet_id` references `wallets.id` with `ON DELETE RESTRICT`.
+
+---
+
+### 🆔 Primary Key & ID Generation Strategy
+
+**Key Design Decision:** All system IDs (User, Wallet, Ledger) are generated at the **application level** using a centralized `IdGenerator` utility wrapper (`src/common/utils/id-generator.ts`) executing Node's native `crypto.randomUUID()`, rather than relying on MySQL's native `DEFAULT (UUID())` database constraint.
+
+#### Architectural Rationale (Why We Chose This)
+
+| Risk Factor | Database-Level UUID | App-Level IdGenerator (Our Approach) |
+| :--- | :--- | :--- |
+| **Insert Record Retrieval** | ❌ **Broken.** MySQL's `LAST_INSERT_ID()` returns `0` for functional defaults. Knex cannot easily fetch the newly generated row. | ✅ **Perfect.** The ID is known *before* the insert query runs, allowing instant, clean `.where('id', walletId).first()` fetch queries. |
+| **Framework Compatibility** | ❌ **Flawed.** Knex's built-in `table.uuid()` generates Postgres-specific syntax that causes compilation crashes on MySQL engines. | ✅ **Database Agnostic.** Perfectly compatible with MySQL, PostgreSQL, SQLite, or any future datastore without engine overrides. |
+| **Testability & Mocking** | ❌ **Untestable.** Relies on database side-effects, making isolated unit testing or repository mocking impossible. | ✅ **Highly Testable.** Bound to an `IIdGenerator` interface, allowing us to swap in a `MockIdGenerator` for deterministic testing. |
+| **System Visibility** | ❌ **Blind.** The ID is hidden until after a database write transaction completes. | ✅ **Transparent.** The unique ID can be attached to application logs and internal audit trails before the query hits the wire. |
+
+#### Implementation
+
+```typescript
+// src/common/utils/id-generator.ts
+import crypto from 'crypto';
+
+export interface IIdGenerator {
+  generate(): string;
+}
+
+export class IdGenerator implements IIdGenerator {
+  public generate(): string {
+    return crypto.randomUUID();
+  }
+}
+
+export const idGenerator = new IdGenerator();
+```
+
+#### Usage Pattern (in all repositories)
+
+```typescript
+// Example from wallet.repository.ts
+import { idGenerator } from '../../common/utils/id-generator';
+
+public async createWallet(userId: string, trx: Knex.Transaction): Promise<WalletRecord> {
+  const walletId = idGenerator.generate();  // Known BEFORE insert
+
+  await trx<WalletRecord>('wallets').insert({
+    id: walletId,
+    user_id: userId,
+    balance: '0',
+  });
+
+  // Direct lookup using the known ID:
+  const insertedWallet = await trx<WalletRecord>('wallets')
+    .where('id', walletId)
+    .first();
+
+  return insertedWallet as WalletRecord;
+}
+```
+
+---
+
+**Kobo-only Monetary Storage**: All monetary values (`wallets.balance`, `ledger_entries.amount`) are stored as `VARCHAR(64)` containing integer strings representing kobo (smallest Nigerian currency unit: 1 Naira = 100 kobo). No decimal types are used — all arithmetic is performed with JavaScript `bigint` for perfect precision. The frontend is responsible for converting kobo to/from any display format (e.g., dividing by 100 to show Naira).
 
 ### 7.2 Migration Scripts
 
@@ -815,7 +878,7 @@ Creates the `users` table with email and BVN uniqueness constraints using UUID p
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
-| `id` | `UUID` | `PRIMARY KEY DEFAULT UUID()` | UUID v4 generated by MySQL |
+| `id` | `VARCHAR(36)` | `PRIMARY KEY` | UUID v4 generated at **application level** via `IdGenerator` |
 | `email` | `VARCHAR(255)` | `NOT NULL UNIQUE` | Case-insensitive via index |
 | `bvn` | `VARCHAR(11)` | `NOT NULL UNIQUE` | Nigerian BVN (11 digits) |
 | `password_hash` | `VARCHAR(255)` | `NOT NULL` | bcrypt (12 rounds) |
@@ -834,7 +897,7 @@ Creates the `wallets` table with 1:1 relationship to users using UUID foreign ke
 |--------|------|-------------|-------|
 | `id` | `UUID` | `PRIMARY KEY DEFAULT UUID()` | UUID v4 generated by MySQL |
 | `user_id` | `UUID` | `NOT NULL UNIQUE`, `REFERENCES users(id) ON DELETE CASCADE` | 1 wallet per user |
-| `balance` | `DECIMAL(20,4)` | `NOT NULL DEFAULT '0.0000'` | 20 total digits, 4 decimal places |
+| `balance` | `VARCHAR(64)` | `NOT NULL DEFAULT '0'` | Kobo as integer string (e.g., "10000" = 100.00 Naira) |
 | `created_at` | `DATETIME(6)` | `NOT NULL DEFAULT CURRENT_TIMESTAMP(6)` | Microsecond precision |
 | `updated_at` | `DATETIME(6)` | `NOT NULL DEFAULT CURRENT_TIMESTAMP(6)` | Updated on modification |
 
@@ -851,7 +914,7 @@ Creates the `ledger_entries` table with double-entry bookkeeping using UUID fore
 |--------|------|-------------|-------|
 | `id` | `UUID` | `PRIMARY KEY DEFAULT UUID()` | UUID v4 generated by MySQL |
 | `wallet_id` | `UUID` | `NOT NULL REFERENCES wallets(id) ON DELETE RESTRICT` | Links to wallet |
-| `amount` | `DECIMAL(20,4)` | `NOT NULL` | Exact decimal (no rounding) |
+| `amount` | `VARCHAR(64)` | `NOT NULL` | Kobo as integer string (e.g., "5000" = 50.00 Naira) |
 | `type` | `ENUM('DEBIT', 'CREDIT')` | `NOT NULL` | DEBIT or CREDIT |
 | `description` | `VARCHAR(255)` | `NOT NULL` | Audit description with transaction reference |
 | `created_at` | `DATETIME(6)` | `NOT NULL DEFAULT CURRENT_TIMESTAMP(6)` | Immutable timestamp |
@@ -861,14 +924,20 @@ Creates the `ledger_entries` table with double-entry bookkeeping using UUID fore
 
 **Key Design Decision**: `ON DELETE RESTRICT` on `wallet_id` prevents deletion of a wallet that still has ledger entries, enforcing the **Conservation of Value** law at the database level.
 
-### 7.3 Decimal Precision
+### 7.3 Kobo Storage & Precision
 
-All monetary fields use `DECIMAL(20,4)` — 20 total digits, 4 decimal places. This provides:
+All monetary values are stored exclusively in **kobo** (the smallest Nigerian currency unit: 1 Naira = 100 kobo) as integer strings in `VARCHAR(64)` columns.
 
-- **Range**: Up to `99,999,999,999,999,999.9999` (approximately 100 quadrillion)
-- **Precision**: Exactly 4 decimal places (0.0001 precision, equivalent to 1/10,000 of the base currency unit)
-- **No rounding errors**: Unlike `FLOAT` or `DOUBLE`, `DECIMAL` arithmetic is exact in SQL
-- **Decimal.js alignment**: Both MySQL `DECIMAL(20,4)` and `Decimal.js` use the same 4-decimal precision, preventing cross-boundary precision loss
+**Key Design Principles:**
+- **No decimal types anywhere**: Database uses `VARCHAR(64)` to store integer strings (e.g., `"10000"`)
+- **No floating-point arithmetic**: All calculations use JavaScript `bigint` for perfect precision
+- **Frontend conversion only**: The frontend is responsible for converting kobo to/from any display format (e.g., divide by 100 to show Naira)
+- **Unlimited precision**: `VARCHAR(64)` can handle extremely large integer values (up to 64 digits)
+
+**Why strings?**
+- `bigint` in JavaScript can handle arbitrarily large integers
+- String storage ensures compatibility across databases and prevents precision loss during serialization
+- MySQL arithmetic uses `CAST(amount AS DECIMAL(65,0))` for operations, casting back to string for storage
 
 ---
 
@@ -884,7 +953,7 @@ All monetary fields use `DECIMAL(20,4)` — 20 total digits, 4 decimal places. T
 | CORS Restriction | Client Policy | Whitelist-based origin checking |
 | Security Headers | Browser Protection | HSTS, X-Frame-Options, X-Content-Type-Options, CSP |
 | SQL Injection Prevention | Data Access | Parameterized queries via Knex query builder |
-| Decimal Arithmetic | Financial Integrity | `Decimal.js` — no floating-point rounding errors |
+| Kobo-only Integer Arithmetic | Financial Integrity | `bigint` — no floating-point, no decimals, perfect precision |
 | FOR UPDATE Locking | Concurrency | Pessimistic locks prevent double-spending |
 | Circuit Breaker | Resilience | Opossum prevents cascading failures to external API |
 
@@ -1219,4 +1288,165 @@ All costs estimated for AWS us-east-1 (on-demand, no reserved instances). Reserv
 
 ---
 
-*Document Version: 1.2.0 | Wallet Engine | Built with TypeScript + Node.js + Express + MySQL 8.0 | Updated for production deployment on Render*
+*Document Version: 1.3.0 | Wallet Engine | Built with TypeScript + Node.js + Express + MySQL 8.0 | Updated for production deployment on Render with Aiven MySQL*
+
+---
+
+## 11. Recent Changes & Production Configuration
+
+### 11.1 Removed Technologies
+
+| Removed | Reason | Replacement |
+|---------|--------|-------------|
+| **Docker** | Unnecessary complexity for Render deployment | Native Node.js deployment |
+| **OpenTelemetry** (`@opentelemetry/*`) | `prom-client` already provides working /metrics endpoint | `prom-client` (retained) |
+| **PostgreSQL-specific UUID** (`DEFAULT UUID()`) | Not compatible with MySQL 8.0 | App-level `crypto.randomUUID()` |
+| **DECIMAL(20,4)** for monetary values | Unnecessary complexity, frontend handles display | `VARCHAR(64)` with kobo integer strings |
+
+### 11.2 Production Database: Aiven MySQL
+
+The system is configured for **Aiven MySQL** (managed MySQL service) with the following configuration:
+
+| Configuration | Value | Environment Variable |
+|---------------|-------|----------------------|
+| Host | Aiven-provided host | `DB_HOST` |
+| Port | Aiven-provided port (typically 21997) | `DB_PORT` |
+| Database | `wallet_engine` | `DB_NAME` |
+| User | Aiven-provided username | `DB_USER` |
+| Password | Aiven-provided password | `DB_PASSWORD` |
+| SSL | **Required** | `DB_SSL=true` or `NODE_ENV=production` |
+
+**SSL Enforcement**: When `NODE_ENV=production` or `DB_SSL=true`, the MySQL connection uses SSL with `rejectUnauthorized: false` (Aiven uses self-signed certificates by default).
+
+### 11.3 Environment Variables Template
+
+```bash
+# Production (.env.production)
+NODE_ENV=production
+PORT=3000
+JWT_SECRET=your-production-jwt-secret-key
+JWT_EXPIRES_IN=15m
+REFRESH_TOKEN_SECRET=your-production-refresh-secret-key
+REFRESH_TOKEN_EXPIRES_IN=7d
+
+# Aiven MySQL
+DB_HOST=mysql-your-project.aivencloud.com
+DB_PORT=21997
+DB_NAME=wallet_engine
+DB_USER=avnadmin
+DB_PASSWORD=your-aiven-password
+DB_SSL=true
+
+# Adjutor Karma API (for BVN blacklist verification)
+ADJUTOR_KARMA_API_BASE_URL=https://adjutor.lendsqr.com/v2
+ADJUTOR_KARMA_API_KEY=your-adjutor-api-key
+CIRCUIT_BREAKER_TIMEOUT=3000
+CIRCUIT_BREAKER_ERROR_PERCENTAGE_THRESHOLD=50
+CIRCUIT_BREAKER_VOLUME_THRESHOLD=5
+BLACKLIST_CACHE_TTL_MS=300000
+```
+
+### 11.4 Deployment to Render
+
+The system uses **native Node.js deployment** on Render (no Docker):
+
+1. Connect your GitHub repository to Render
+2. Configure environment variables in Render dashboard (matches `.env.production`)
+3. Set **Build Command**: `npm install && npm run build`
+4. Set **Start Command**: `npm start`
+5. Ensure Aiven MySQL allows Render's IP addresses (or use `0.0.0.0/0` for testing)
+
+**Key Files**:
+- `package.json` - Contains `build` and `start` scripts
+- `knexfile.ts` - Production config reads compiled JS from `./dist/`
+- `config/database.ts` - SSL auto-enabled in production
+
+---
+
+## 12. Data Access Layer (DAL) Optimizations (v1.3.0+)
+
+### 12.1 Creation Operation Refactor: Eliminating Redundant Database Round-Trips
+
+**Problem Identified:** All three repository creation methods (`createUser()`, `createWallet()`, `createEntry()`) were performing a wasteful sequential pattern:
+
+```
+INSERT → SELECT (redundant) → Return fetched row
+```
+
+Since we control the `id` via app-level `IdGenerator`, we already know the complete row state **before** the database write. The post-insert `SELECT` query was a completely unnecessary network hop.
+
+**Solution Applied:**
+
+```typescript
+// BEFORE (wasteful - 2 database round-trips)
+public async createWallet(userId: string, trx: Knex.Transaction): Promise<WalletRecord> {
+  const walletId = idGenerator.generate();
+  
+  await trx('wallets').insert({ id: walletId, user_id: userId, balance: '0' });
+  
+  // REDUNDANT NETWORK HOP ↓
+  const inserted = await trx('wallets').where('id', walletId).first();
+  if (!inserted) throw new RepositoryException(...);
+  return inserted;
+}
+
+// AFTER (optimized - 1 database round-trip)
+public async createWallet(userId: string, trx: Knex.Transaction): Promise<WalletRecord> {
+  const walletId = idGenerator.generate();
+  const now = new Date();       // In-memory timestamp sync
+  const initialBalance = '0';
+  
+  await trx('wallets').insert({
+    id: walletId,
+    user_id: userId,
+    balance: initialBalance,
+    created_at: now,             // Explicit timestamp
+    updated_at: now,             // Explicit timestamp
+  });
+  
+  // Return directly from memory - NO DATABASE HOP
+  return {
+    id: walletId,
+    user_id: userId,
+    balance: initialBalance,
+    created_at: now,
+    updated_at: now,
+  };
+}
+```
+
+### 12.2 Tradeoff Analysis
+
+| Dimension | Before (INSERT + SELECT) | After (INSERT + Memory Return) |
+| :--- | :--- | :--- |
+| **Network Round-Trips** | 2 per creation | 1 per creation |
+| **Database Load** | Higher (2 queries) | Lower (1 query) |
+| **Latency per Create** | Higher (2x network + query overhead) | Lower (single query) |
+| **Error Detection** | Detected missing row via `if (!inserted)` | MySQL constraint violations throw naturally; transaction rolls back at service boundary |
+| **Timestamp Accuracy** | Relied on MySQL's `CURRENT_TIMESTAMP(6)` | Application-level `new Date()` synchronized to transaction start |
+| **Testability** | Required database-backed assertions | Fully mockable at repository interface level |
+
+### 12.3 Key Architectural Principles Leveraged
+
+1. **Application-Level ID Generation:** The `IdGenerator` utility makes this optimization possible. We control the primary key, so we know the complete row contract before the query executes.
+
+2. **Transaction Propagation & Natural Error Handling:** No artificial `try/catch` blocks were added in the repository layer. MySQL constraint violations (e.g., duplicate `email`, duplicate `bvn`, foreign key violations) will:
+   - Naturally throw a runtime exception from Knex
+   - Short-circuit the execution thread
+   - Trigger cascading transaction rollback at the service boundary (via `withTransaction` helper)
+
+3. **In-Memory State Construction:** Timestamps are captured via `const now = new Date()` for deterministic synchronization. All column values are explicitly set, eliminating reliance on database `DEFAULT` clauses for returned records.
+
+### 12.4 Performance Impact
+
+| Metric | Estimated Improvement |
+| :--- | :--- |
+| Network hops reduced | **50%** (2 → 1 per create) |
+| Database query count | **50%** reduction |
+| Latency per creation | ~30-50% faster (eliminates network + query planning overhead) |
+| Connection pool utilization | Improved (fewer queries = faster connection release) |
+
+**Note:** This optimization is most impactful in:
+- High-throughput transactional workloads
+- Geographically distributed deployments (database in different AZ/region)
+- Serverless environments where connection churn is expensive
